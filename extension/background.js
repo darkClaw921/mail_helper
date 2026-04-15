@@ -65,7 +65,7 @@ async function readSettings() {
     'notify_important',
   ]);
   return {
-    backendUrl: (backend_url || 'http://localhost:3000').replace(/\/+$/, ''),
+    backendUrl: (backend_url || '').replace(/\/+$/, ''),
     apiKey: api_key || '',
     notifyImportant: notify_important !== false, // default true
   };

@@ -26,15 +26,33 @@
   /** @type {Map<number, any>} */
   const messagesById = new Map();
   let currentFilter = 'important';
-  let settings = { backend_url: 'http://localhost:3000', api_key: '' };
+  let settings = { backend_url: '', api_key: '' };
+  let serverOnline = false;
 
   const $ = (sel) => document.querySelector(sel);
 
   // ── storage ──────────────────────────────────────────────────────────
   async function loadSettings() {
     const s = await chrome.storage.local.get(['backend_url', 'api_key']);
-    settings.backend_url = (s.backend_url || 'http://localhost:3000').replace(/\/+$/, '');
+    settings.backend_url = (s.backend_url || '').replace(/\/+$/, '');
     settings.api_key = s.api_key || '';
+  }
+
+  // Health-check: /api/health — публичный, подтверждает что backend запущен.
+  async function checkServer() {
+    if (!settings.backend_url) return false;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 3000);
+      const res = await fetch(`${settings.backend_url}/api/health`, {
+        method: 'GET',
+        signal: ctrl.signal,
+      });
+      clearTimeout(t);
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 
   // ── fetch ────────────────────────────────────────────────────────────
@@ -76,7 +94,21 @@
   }
 
   async function refresh() {
+    if (!settings.backend_url || !settings.api_key) {
+      renderError('Backend URL и API Key не заданы. Открой Options.');
+      return;
+    }
+    // Проверяем что сервер вообще отвечает — иначе не показываем старые данные.
     const empty = $('#empty-state');
+    if (empty) empty.textContent = 'Проверка сервера…';
+    serverOnline = await checkServer();
+    if (!serverOnline) {
+      messagesById.clear();
+      render();
+      renderError('Сервер Mail Helper недоступен. Проверь, что backend запущен: ./setup.sh');
+      return;
+    }
+
     if (empty) empty.textContent = 'Loading…';
 
     try {
@@ -304,7 +336,12 @@
         return;
       }
       case 'ws_status': {
-        setWsStatus(msg.data?.state || 'unknown');
+        const st = msg.data?.state || 'unknown';
+        setWsStatus(st);
+        // Когда WS переподключился к серверу — дотягиваем свежий список.
+        if (st === 'connected' && !serverOnline) {
+          refresh().catch(() => {});
+        }
         return;
       }
       case 'focus_message': {
@@ -390,8 +427,8 @@
       renderError(`Failed to read storage: ${err?.message || err}`);
       return;
     }
-    if (!settings.api_key) {
-      renderError('API Key not configured. Open Settings.');
+    if (!settings.backend_url || !settings.api_key) {
+      renderError('Backend URL и/или API Key не заданы. Открой Options.');
       return;
     }
     chrome.runtime.onMessage?.addListener((msg) => {

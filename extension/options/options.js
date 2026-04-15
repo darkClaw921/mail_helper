@@ -33,8 +33,11 @@ async function loadSettings() {
     'api_key',
     'notify_important',
   ]);
-  document.getElementById('backend-url').value =
-    stored.backend_url || 'http://localhost:3000';
+  // Не подставляем дефолтный URL — пользователь должен явно указать сервер,
+  // чтобы расширение не лезло в произвольный localhost без разрешения.
+  const el = document.getElementById('backend-url');
+  el.value = stored.backend_url || '';
+  if (!el.placeholder) el.placeholder = 'http://localhost:3000';
   document.getElementById('api-key').value = stored.api_key || '';
   document.getElementById('notify-important').checked =
     stored.notify_important !== false; // default true
