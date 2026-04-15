@@ -1,41 +1,74 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Mail Helper</title>
+    <title>MailMind AI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="sidebar.css" />
   </head>
   <body>
-    <div class="sidebar">
-      <header class="header">
-        <div class="brand">
-          <span class="brand-dot"></span>
-          <span class="brand-title">Mail Helper</span>
-        </div>
-        <div class="ws-status" id="ws-status" title="WebSocket connection status">
-          <span class="ws-dot" id="ws-dot"></span>
-          <span id="ws-label">…</span>
-        </div>
+    <div class="mh-panel">
+      <!-- Header -->
+      <header class="mh-hdr">
+        <div class="mh-logo" aria-hidden="true"></div>
+        <span class="mh-title">MailMind AI</span>
+        <span class="mh-spacer"></span>
+        <span class="mh-badge mh-badge--ai">AI-Ассистент</span>
+        <button
+          class="mh-min-btn"
+          id="mh-min-btn"
+          type="button"
+          title="Свернуть"
+          aria-label="Свернуть"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
       </header>
 
-      <nav class="filters" role="tablist">
-        <button class="filter active" data-filter="important" role="tab">
-          Important
+      <div class="mh-divider"></div>
+
+      <!-- AI analysis section -->
+      <section class="mh-ai" id="mh-ai-section">
+        <div class="mh-section-title">AI-АНАЛИЗ</div>
+        <div class="mh-ai-body" id="mh-ai-body">
+          <div class="mh-empty mh-empty--inline" id="mh-ai-empty">
+            Пока нет важных писем для анализа.
+          </div>
+        </div>
+      </section>
+
+      <div class="mh-divider"></div>
+
+      <!-- Analyzed emails list -->
+      <section class="mh-emails">
+        <div class="mh-section-title">ПРОАНАЛИЗИРОВАННЫЕ ПИСЬМА</div>
+        <ul class="mh-list" id="mh-list">
+          <li class="mh-empty" id="mh-list-empty">Загрузка…</li>
+        </ul>
+      </section>
+
+      <div class="mh-divider"></div>
+
+      <!-- Footer -->
+      <footer class="mh-ft">
+        <button class="mh-btn mh-btn--primary" id="mh-mark-all" type="button">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 11 17 6 12"/><polyline points="22 10 16 16"/></svg>
+          <span>Отметить всё прочитанным</span>
         </button>
-        <button class="filter" data-filter="unread" role="tab">Unread</button>
-        <button class="filter" data-filter="all" role="tab">All</button>
-        <button class="filter refresh" id="refresh-btn" title="Refresh">↻</button>
-      </nav>
-
-      <div class="messages" id="messages">
-        <div class="empty" id="empty-state">Loading…</div>
-      </div>
-
-      <footer class="footer">
-        <span id="count">0 messages</span>
-        <button class="link" id="open-options">Settings</button>
+        <a href="#" class="mh-link" id="mh-open-app">Открыть приложение</a>
+        <div class="mh-model">Работает на Grok 4.1 Fast через OpenRouter</div>
       </footer>
+
+      <!-- WS status pill (small, top-right corner overlay; non-obtrusive) -->
+      <div class="mh-ws" id="mh-ws" title="Соединение">
+        <span class="mh-ws-dot" id="mh-ws-dot"></span>
+      </div>
     </div>
 
     <script src="sidebar.js"></script>

@@ -3,21 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Mail Helper</title>
+    <title>MailMind AI</title>
+
+    <!-- Google Fonts: Inter + Geist Mono. Весь UI рендерит shell.js/components,
+         поэтому в теле оставляем только #app — никакой статической nav. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap"
+    />
+
     <link href="/src/style.css" rel="stylesheet" />
   </head>
-  <body class="min-h-screen bg-slate-50 text-slate-900">
-    <nav class="border-b bg-white">
-      <div class="mx-auto flex max-w-5xl items-center gap-4 px-4 py-3">
-        <span class="font-semibold">Mail Helper</span>
-        <a href="#/inbox" class="text-sm text-slate-600 hover:text-slate-900">Inbox</a>
-        <a href="#/accounts" class="text-sm text-slate-600 hover:text-slate-900">Accounts</a>
-        <a href="#/prompts" class="text-sm text-slate-600 hover:text-slate-900">Prompts</a>
-        <a href="#/actions" class="text-sm text-slate-600 hover:text-slate-900">Actions</a>
-        <a href="#/settings" class="text-sm text-slate-600 hover:text-slate-900">Settings</a>
-      </div>
-    </nav>
-    <main id="app" class="mx-auto max-w-5xl px-4 py-6"></main>
+  <body>
+    <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

@@ -21,6 +21,7 @@ import accountsRouter from './api/accounts.js';
 import promptsRouter from './api/prompts.js';
 import actionsRouter from './api/actions.js';
 import messagesRouter from './api/messages.js';
+import statsRouter from './api/stats.js';
 
 const PKG_VERSION = '0.1.0';
 const STARTED_AT = Date.now();
@@ -47,6 +48,7 @@ app.use('/api/accounts', accountsRouter);
 app.use('/api/prompts', promptsRouter);
 app.use('/api/actions', actionsRouter);
 app.use('/api/messages', messagesRouter);
+app.use('/api/stats', statsRouter);
 
 // 404 для неизвестных /api/* роутов.
 app.use('/api', (_req, res) => {

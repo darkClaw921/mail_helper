@@ -1,76 +1,112 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Mail Helper — Settings</title>
+    <title>MailMind AI — Настройки</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>
-    <main class="container">
-      <header>
-        <h1>Mail Helper</h1>
-        <p class="subtitle">Extension settings</p>
+    <main class="opt-page">
+      <header class="opt-hdr">
+        <div class="opt-brand">
+          <span class="opt-logo" aria-hidden="true"></span>
+          <div class="opt-brand-text">
+            <h1 class="opt-title">MailMind AI</h1>
+            <p class="opt-subtitle">Настройки расширения</p>
+          </div>
+        </div>
       </header>
 
-      <section class="card">
-        <h2>Backend connection</h2>
-
-        <label for="backend-url">Backend URL</label>
-        <input
-          type="url"
-          id="backend-url"
-          name="backend-url"
-          placeholder="http://localhost:3000"
-          autocomplete="off"
-          spellcheck="false"
-        />
-        <p class="hint">
-          The HTTP origin of your Mail Helper server. WebSocket URL is derived
-          automatically by swapping http:// → ws:// (https → wss).
-        </p>
-
-        <label for="api-key">API Key</label>
-        <input
-          type="password"
-          id="api-key"
-          name="api-key"
-          placeholder="paste your api_key from backend settings"
-          autocomplete="off"
-          spellcheck="false"
-        />
-        <p class="hint">
-          Generated on first backend start and stored in <code>settings.api_key</code>.
-          Used for both <code>X-API-Key</code> header and WS <code>?token=</code> query.
-        </p>
-
-        <div class="actions">
-          <button type="button" id="save-btn" class="primary">Save</button>
-          <button type="button" id="test-btn">Test connection</button>
-          <button type="button" id="reconnect-btn">Reconnect WS</button>
+      <!-- Server card -->
+      <section class="opt-card">
+        <div class="opt-card-head">
+          <h2 class="opt-card-title">Сервер</h2>
+          <p class="opt-card-desc">
+            Подключение к Mail Helper backend. WebSocket собирается из URL
+            автоматически (http→ws, https→wss).
+          </p>
         </div>
 
-        <div id="status" class="status" role="status" aria-live="polite"></div>
+        <div class="opt-field">
+          <label class="opt-label" for="backend-url">Backend URL</label>
+          <input
+            class="opt-input"
+            type="url"
+            id="backend-url"
+            name="backend-url"
+            placeholder="http://localhost:3000"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
+
+        <div class="opt-field">
+          <label class="opt-label" for="api-key">API Key</label>
+          <input
+            class="opt-input"
+            type="password"
+            id="api-key"
+            name="api-key"
+            placeholder="вставьте api_key из настроек backend"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <p class="opt-hint">
+            Сгенерирован при первом запуске backend. Используется как
+            <code>X-API-Key</code> и WS <code>?token=</code>.
+          </p>
+        </div>
+
+        <div class="opt-actions">
+          <button type="button" id="test-btn" class="opt-btn opt-btn--ghost">
+            Проверить
+          </button>
+          <button type="button" id="reconnect-btn" class="opt-btn opt-btn--ghost">
+            Reconnect WS
+          </button>
+          <button type="button" id="save-btn" class="opt-btn opt-btn--primary">
+            Сохранить
+          </button>
+        </div>
+
+        <div id="status" class="opt-status" role="status" aria-live="polite"></div>
       </section>
 
-      <section class="card">
-        <h2>Notifications</h2>
-        <label class="checkbox">
+      <!-- Notifications card -->
+      <section class="opt-card">
+        <div class="opt-card-head">
+          <h2 class="opt-card-title">Уведомления</h2>
+          <p class="opt-card-desc">
+            Поведение при поступлении новых писем, помеченных AI как важные.
+          </p>
+        </div>
+
+        <label class="opt-checkbox">
           <input type="checkbox" id="notify-important" />
-          <span>Show desktop notification for every important message</span>
+          <span>Уведомлять о важных письмах</span>
         </label>
-        <p class="hint">
-          Uses <code>chrome.notifications</code>. You may also need to enable
-          browser-level notifications in OS settings.
-        </p>
 
-        <div class="actions">
-          <button type="button" id="save-notify-btn">Save notification settings</button>
+        <label class="opt-checkbox">
+          <input type="checkbox" id="notify-sound" />
+          <span>Звук при получении</span>
+        </label>
+
+        <div class="opt-actions">
+          <button type="button" id="save-notify-btn" class="opt-btn opt-btn--primary">
+            Сохранить
+          </button>
         </div>
       </section>
 
-      <footer>
-        <p class="version">Mail Helper · MV3 extension</p>
+      <footer class="opt-ft">
+        <p>MailMind AI · MV3 · Работает на Grok 4.1 Fast через OpenRouter</p>
       </footer>
     </main>
 

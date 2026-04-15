@@ -1,6 +1,12 @@
 // classifier.js — применение LLM-промта к одному письму.
 //
 // Экспортирует:
+//   * composeSystemPrompt(userInstruction, schemaJson?) — оборачивает пользовательскую
+//     инструкцию системной шапкой (формат входа subject/from/body) и JSON-контрактом.
+//     Пользователь в UI указывает ТОЛЬКО бизнес-логику классификации; формат ввода и
+//     структуру ответа подставляем автоматически. Для обратной совместимости: если в
+//     тексте уже явно прописан legacy-контракт («Верни СТРОГО JSON» / "important":) —
+//     возвращаем строку как есть, без двойного оборачивания.
 //   * buildUserPrompt(message) — формирует user-content из полей письма
 //     (subject, from, to, body_text обрезается до 4000 символов).
 //   * pickPromptForMessage() — выбирает активный промт: сначала enabled=1 + is_default=1,
@@ -23,6 +29,111 @@ const log = logger.child({ module: 'classifier' });
 
 const BODY_MAX = 4000;
 
+/* --- Системная обвязка, добавляемая автоматически ------------------------ */
+
+const SYSTEM_PREAMBLE =
+  'Ты — классификатор электронной почты. На вход получаешь subject, from, body.';
+
+const FALLBACK_OUTPUT_CONTRACT = `Верни СТРОГО JSON следующей структуры:
+{
+  "important": boolean,
+  "reason": "краткая причина на русском (<=140 символов)",
+  "tags": ["work"|"personal"|"bill"|"security"|"spam"|"other", ...],
+  "summary": "1-2 предложения сути письма"
+}`;
+
+/**
+ * Нормализует output_params (которые могут прийти строкой из БД либо уже массивом).
+ * Возвращает массив объектов {key,type,description,required}. Невалидные элементы отсекаются.
+ */
+export function parseOutputParams(raw) {
+  if (raw == null || raw === '') return [];
+  let arr = raw;
+  if (typeof raw === 'string') {
+    try {
+      arr = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .map((p) => {
+      if (!p || typeof p !== 'object') return null;
+      const key = String(p.key || '').trim();
+      if (!key) return null;
+      const type = String(p.type || 'string').trim();
+      const description = p.description == null ? '' : String(p.description);
+      const required = p.required === true || p.required === 1;
+      return { key, type, description, required };
+    })
+    .filter(Boolean);
+}
+
+/**
+ * Рендерит блок контракта на основе списка параметров.
+ * @param {Array<{key,type,description,required}>} params
+ * @returns {string}
+ */
+function renderParamsContract(params) {
+  const lines = params.map((p) => {
+    const t = p.type || 'string';
+    const desc = p.description ? ` — ${p.description}` : '';
+    const req = p.required ? ' (обязательное)' : '';
+    return `  "${p.key}": <${t}>${desc}${req}`;
+  });
+  return [
+    'Верни СТРОГО JSON следующей структуры (без лишних полей):',
+    '{',
+    lines.join(',\n'),
+    '}',
+  ].join('\n');
+}
+
+/**
+ * Оборачивает пользовательскую инструкцию системной шапкой и JSON-контрактом.
+ *
+ * @param {string} userInstruction — текст из prompts.system_prompt (чистая бизнес-логика).
+ * @param {object} [opts]
+ * @param {Array|string} [opts.params]     — output_params (массив или сериализованный JSON).
+ *                                           Если задан непустым — контракт строится из параметров.
+ * @param {string|null}  [opts.schemaJson] — raw JSON-schema из prompts.output_schema.
+ *                                           Используется, если params не заданы/пусты.
+ * @returns {string} — итоговый system-content для LLM.
+ */
+export function composeSystemPrompt(userInstruction, opts = {}) {
+  // Back-compat: если вторым аргументом пришла строка (старый API: schemaJson), адаптируем.
+  if (typeof opts === 'string' || opts === null) {
+    // eslint-disable-next-line no-param-reassign
+    opts = { schemaJson: opts };
+  }
+  const { params, schemaJson = null } = opts || {};
+
+  const text = String(userInstruction ?? '').trim();
+
+  // Backward-compat: старые промты (до рефакторинга) уже содержат полный контракт —
+  // не оборачиваем повторно, чтобы не дублировать.
+  const hasLegacyContract =
+    /Верни\s+СТРОГО\s+JSON/i.test(text) || /"important"\s*:/i.test(text);
+  if (hasLegacyContract) return text;
+
+  const paramList = parseOutputParams(params);
+  let contract;
+  if (paramList.length > 0) {
+    contract = renderParamsContract(paramList);
+  } else {
+    const schema = typeof schemaJson === 'string' ? schemaJson.trim() : '';
+    contract = schema
+      ? `Верни СТРОГО JSON, соответствующий схеме:\n${schema}`
+      : FALLBACK_OUTPUT_CONTRACT;
+  }
+
+  const parts = [SYSTEM_PREAMBLE];
+  if (text) parts.push('', text);
+  parts.push('', contract);
+  return parts.join('\n');
+}
+
 const selectDefaultEnabled = db.prepare(
   'SELECT id, name, system_prompt, output_schema, is_default, enabled ' +
     'FROM prompts WHERE enabled = 1 AND is_default = 1 LIMIT 1',
@@ -37,13 +148,13 @@ const selectAnyDefault = db.prepare(
 );
 const updateMessageStmt = db.prepare(
   `UPDATE messages
-      SET classification_json = ?, is_important = ?, prompt_id = ?
+      SET classification_json = ?, is_important = ?, prompt_id = ?, tokens_used = ?
     WHERE id = ?`,
 );
 const selectMessageStmt = db.prepare(
   `SELECT id, account_id, uid, message_id, subject, from_addr, to_addr, date,
           snippet, body_text, body_html, is_read, is_important,
-          classification_json, prompt_id, created_at
+          classification_json, prompt_id, tokens_used, created_at
      FROM messages WHERE id = ?`,
 );
 
@@ -133,8 +244,12 @@ export async function classifyMessage(messageRow, opts = {}) {
 
   try {
     const out = await classify({
-      systemPrompt: prompt.system_prompt,
+      systemPrompt: composeSystemPrompt(prompt.system_prompt, {
+        params: prompt.output_params,
+        schemaJson: prompt.output_schema,
+      }),
       userPrompt,
+      ...(prompt.model ? { model: prompt.model } : {}),
     });
     result = out.result;
     usage = out.usage;
@@ -154,7 +269,8 @@ export async function classifyMessage(messageRow, opts = {}) {
       'LLM classification failed',
     );
     if (persist) {
-      updateMessageStmt.run(JSON.stringify(errorPayload), 0, prompt.id, messageRow.id);
+      // На ошибке tokens не известны — пишем null.
+      updateMessageStmt.run(JSON.stringify(errorPayload), 0, prompt.id, null, messageRow.id);
     }
     return {
       ok: false,
@@ -167,6 +283,7 @@ export async function classifyMessage(messageRow, opts = {}) {
   }
 
   // Парсинг в объект прошёл в openrouter.classify(). Дополнительно убеждаемся что это объект.
+  const usageTokens = usage?.total_tokens ?? null;
   if (!result || typeof result !== 'object') {
     const msg = 'LLM returned non-object JSON';
     log.error(
@@ -175,7 +292,7 @@ export async function classifyMessage(messageRow, opts = {}) {
     );
     const errorPayload = { error: true, message: msg };
     if (persist) {
-      updateMessageStmt.run(JSON.stringify(errorPayload), 0, prompt.id, messageRow.id);
+      updateMessageStmt.run(JSON.stringify(errorPayload), 0, prompt.id, usageTokens, messageRow.id);
     }
     return {
       ok: false,
@@ -183,14 +300,14 @@ export async function classifyMessage(messageRow, opts = {}) {
       result: errorPayload,
       prompt_id: prompt.id,
       durationMs,
-      tokens: usage?.total_tokens ?? null,
+      tokens: usageTokens,
     };
   }
 
   const isImportant = result.important === true ? 1 : 0;
 
   if (persist) {
-    updateMessageStmt.run(JSON.stringify(result), isImportant, prompt.id, messageRow.id);
+    updateMessageStmt.run(JSON.stringify(result), isImportant, prompt.id, usageTokens, messageRow.id);
   }
 
   log.info(

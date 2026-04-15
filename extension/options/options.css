@@ -1,180 +1,285 @@
-/* options/options.css — стили страницы настроек. Нейтральная светлая тема,
- * достаточная для MV3 options_page без зависимостей. */
+/* options/options.css — карточный лэйаут страницы настроек.
+ * Использует те же дизайн-токены, что и sidebar (--mh-*), но с префиксом opt-
+ * для классов разметки.
+ */
+
+:root {
+  --mh-accent-purple: #7c3aed;
+  --mh-accent-cyan: #0891b2;
+  --mh-accent-red: #dc2626;
+
+  --mh-bg-primary: #ffffff;
+  --mh-bg-card: #ffffff;
+  --mh-bg-elevated: #f0f1f5;
+  --mh-bg-page: #f7f7fb;
+
+  --mh-border-subtle: #e5e7eb;
+  --mh-border-default: #d1d5db;
+
+  --mh-text-primary: #111827;
+  --mh-text-secondary: #6b7280;
+  --mh-text-muted: #9ca3af;
+
+  --mh-radius-sm: 6px;
+  --mh-radius-md: 8px;
+  --mh-radius-lg: 12px;
+
+  --mh-font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --mh-font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 
 * {
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
-    Ubuntu, Cantarell, sans-serif;
+  padding: 0;
+  background: var(--mh-bg-page);
+  color: var(--mh-text-primary);
+  font-family: var(--mh-font-sans);
   font-size: 14px;
-  color: #111827;
-  background: #f9fafb;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-.container {
-  max-width: 640px;
-  margin: 32px auto;
-  padding: 0 16px;
+.opt-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 40px 24px 64px;
 }
 
-header h1 {
+/* ─── Header ─────────────────────────────────────────────────────────── */
+.opt-hdr {
+  margin-bottom: 24px;
+}
+
+.opt-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.opt-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: conic-gradient(from 220deg, var(--mh-accent-purple), var(--mh-accent-cyan), var(--mh-accent-purple));
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.18) inset;
+}
+
+.opt-brand-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.opt-title {
   font-size: 22px;
-  margin: 0 0 4px 0;
-  color: #2563eb;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: -0.01em;
+  color: var(--mh-text-primary);
 }
 
-.subtitle {
-  margin: 0 0 24px 0;
-  color: #6b7280;
+.opt-subtitle {
+  margin: 0;
+  color: var(--mh-text-secondary);
+  font-size: 13px;
 }
 
-.card {
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  padding: 20px;
+/* ─── Cards ──────────────────────────────────────────────────────────── */
+.opt-card {
+  background: var(--mh-bg-card);
+  border: 1px solid var(--mh-border-subtle);
+  border-radius: var(--mh-radius-lg);
+  padding: 24px;
   margin-bottom: 16px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04);
 }
 
-.card h2 {
-  margin: 0 0 16px 0;
+.opt-card-head {
+  margin-bottom: 16px;
+}
+
+.opt-card-title {
+  margin: 0 0 4px;
   font-size: 16px;
-  color: #111827;
+  font-weight: 600;
+  color: var(--mh-text-primary);
+  letter-spacing: -0.005em;
 }
 
-label {
+.opt-card-desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--mh-text-secondary);
+}
+
+/* ─── Form fields ────────────────────────────────────────────────────── */
+.opt-field {
+  margin-bottom: 14px;
+}
+
+.opt-label {
   display: block;
-  font-weight: 500;
-  margin: 12px 0 4px 0;
-  color: #374151;
+  font-family: var(--mh-font-mono);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mh-text-muted);
+  margin-bottom: 6px;
 }
 
-input[type="url"],
-input[type="password"],
-input[type="text"] {
+.opt-input {
   width: 100%;
-  padding: 8px 10px;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
+  padding: 9px 12px;
+  border: 1px solid var(--mh-border-default);
+  border-radius: var(--mh-radius-sm);
+  font-family: var(--mh-font-sans);
   font-size: 14px;
-  font-family: inherit;
-  background: #ffffff;
+  background: var(--mh-bg-primary);
+  color: var(--mh-text-primary);
+  transition: border-color 0.12s, box-shadow 0.12s;
 }
 
-input[type="url"]:focus,
-input[type="password"]:focus,
-input[type="text"]:focus {
+.opt-input:focus {
   outline: none;
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+  border-color: var(--mh-accent-purple);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15);
 }
 
-.hint {
-  margin: 4px 0 0 0;
+.opt-hint {
+  margin: 6px 0 0;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--mh-text-muted);
 }
 
-.hint code {
-  background: #f3f4f6;
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+.opt-hint code {
+  background: var(--mh-bg-elevated);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: var(--mh-font-mono);
+  font-size: 11px;
+  color: var(--mh-text-secondary);
 }
 
-.actions {
+/* ─── Checkbox ───────────────────────────────────────────────────────── */
+.opt-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 500;
+  font-size: 14px;
+  margin: 10px 0;
+  cursor: pointer;
+  color: var(--mh-text-primary);
+}
+
+.opt-checkbox input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--mh-accent-purple);
+  cursor: pointer;
+}
+
+/* ─── Buttons ────────────────────────────────────────────────────────── */
+.opt-actions {
   display: flex;
   gap: 8px;
-  margin-top: 16px;
+  margin-top: 18px;
   flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-button {
-  padding: 8px 14px;
-  border-radius: 6px;
-  border: 1px solid #d1d5db;
-  background: #ffffff;
-  color: #111827;
-  font-size: 14px;
-  font-family: inherit;
+.opt-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--mh-radius-sm);
+  border: 1px solid var(--mh-border-default);
+  background: var(--mh-bg-card);
+  color: var(--mh-text-primary);
+  font-family: var(--mh-font-sans);
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
 
-button:hover {
-  background: #f3f4f6;
+.opt-btn:hover {
+  background: var(--mh-bg-elevated);
+  border-color: var(--mh-text-secondary);
 }
 
-button.primary {
-  background: #2563eb;
-  border-color: #2563eb;
+.opt-btn--primary {
+  background: var(--mh-accent-purple);
+  border-color: var(--mh-accent-purple);
   color: #ffffff;
 }
 
-button.primary:hover {
-  background: #1d4ed8;
+.opt-btn--primary:hover {
+  background: #6d28d9;
+  border-color: #6d28d9;
 }
 
-button:disabled {
+.opt-btn--ghost {
+  background: transparent;
+}
+
+.opt-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.status {
+/* ─── Status ─────────────────────────────────────────────────────────── */
+.opt-status {
   margin-top: 14px;
-  min-height: 20px;
   font-size: 13px;
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 10px 12px;
+  border-radius: var(--mh-radius-sm);
   display: none;
   white-space: pre-wrap;
+  font-family: var(--mh-font-mono);
 }
 
-.status.visible {
+.opt-status.visible {
   display: block;
 }
 
-.status.ok {
-  background: #ecfdf5;
-  color: #065f46;
-  border: 1px solid #a7f3d0;
+.opt-status.ok {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
-.status.err {
-  background: #fef2f2;
-  color: #991b1b;
-  border: 1px solid #fecaca;
+.opt-status.err {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--mh-accent-red);
+  border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
-.status.info {
-  background: #eff6ff;
-  color: #1e40af;
-  border: 1px solid #bfdbfe;
+.opt-status.info {
+  background: rgba(124, 58, 237, 0.08);
+  color: var(--mh-accent-purple);
+  border: 1px solid rgba(124, 58, 237, 0.25);
 }
 
-.checkbox {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 400;
-  margin: 12px 0;
-}
-
-.checkbox input {
-  margin: 0;
-}
-
-footer {
+/* ─── Footer ─────────────────────────────────────────────────────────── */
+.opt-ft {
   text-align: center;
-  color: #9ca3af;
-  font-size: 12px;
-  margin-top: 16px;
+  margin-top: 32px;
+  font-family: var(--mh-font-mono);
+  font-size: 11px;
+  color: var(--mh-text-muted);
 }
 
-.version {
+.opt-ft p {
   margin: 0;
 }

@@ -8,7 +8,11 @@ import { z } from 'zod';
 
 import { db } from '../db/index.js';
 import { classify } from '../llm/openrouter.js';
-import { buildUserPrompt } from '../llm/classifier.js';
+import {
+  buildUserPrompt,
+  composeSystemPrompt,
+  parseOutputParams,
+} from '../llm/classifier.js';
 
 const router = Router();
 
@@ -16,11 +20,28 @@ const zBoolInt = z
   .union([z.boolean(), z.number().int().min(0).max(1)])
   .transform((v) => (v ? 1 : 0));
 
+// Разрешённые типы выходных параметров (в JSON-контракте LLM и как whitelist для evaluator).
+const OUTPUT_PARAM_TYPES = ['boolean', 'string', 'number', 'string[]', 'object'];
+
+const zOutputParam = z
+  .object({
+    key: z
+      .string()
+      .min(1)
+      .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'key must be a valid identifier'),
+    type: z.enum(OUTPUT_PARAM_TYPES).default('string'),
+    description: z.string().optional().default(''),
+    required: z.boolean().optional().default(false),
+  })
+  .strict();
+
 const createSchema = z
   .object({
     name: z.string().min(1),
     system_prompt: z.string().min(1),
     output_schema: z.string().optional().nullable(),
+    output_params: z.array(zOutputParam).optional().nullable(),
+    model: z.string().optional().nullable(),
     is_default: zBoolInt.optional(),
     enabled: zBoolInt.optional(),
   })
@@ -29,16 +50,16 @@ const createSchema = z
 const updateSchema = createSchema.partial();
 
 const selectAllStmt = db.prepare(
-  'SELECT id, name, system_prompt, output_schema, is_default, enabled, created_at ' +
+  'SELECT id, name, system_prompt, output_schema, output_params, model, is_default, enabled, created_at ' +
     'FROM prompts ORDER BY id',
 );
 const selectOneStmt = db.prepare(
-  'SELECT id, name, system_prompt, output_schema, is_default, enabled, created_at ' +
+  'SELECT id, name, system_prompt, output_schema, output_params, model, is_default, enabled, created_at ' +
     'FROM prompts WHERE id = ?',
 );
 const insertStmt = db.prepare(
-  'INSERT INTO prompts (name, system_prompt, output_schema, is_default, enabled, created_at) ' +
-    'VALUES (@name, @system_prompt, @output_schema, @is_default, @enabled, @created_at)',
+  'INSERT INTO prompts (name, system_prompt, output_schema, output_params, model, is_default, enabled, created_at) ' +
+    'VALUES (@name, @system_prompt, @output_schema, @output_params, @model, @is_default, @enabled, @created_at)',
 );
 const clearDefaultsStmt = db.prepare(
   'UPDATE prompts SET is_default = 0 WHERE is_default = 1 AND id <> ?',
@@ -46,8 +67,17 @@ const clearDefaultsStmt = db.prepare(
 const clearAllDefaultsStmt = db.prepare('UPDATE prompts SET is_default = 0 WHERE is_default = 1');
 const deleteStmt = db.prepare('DELETE FROM prompts WHERE id = ?');
 
+/**
+ * Нормализует запись из БД для ответа API: output_params возвращается в виде массива,
+ * а не JSON-строки (пользователю/UI удобнее работать с объектами).
+ */
+function shapeRow(row) {
+  if (!row) return row;
+  return { ...row, output_params: parseOutputParams(row.output_params) };
+}
+
 router.get('/', (_req, res) => {
-  res.json({ prompts: selectAllStmt.all() });
+  res.json({ prompts: selectAllStmt.all().map(shapeRow) });
 });
 
 router.get('/:id', (req, res) => {
@@ -55,7 +85,7 @@ router.get('/:id', (req, res) => {
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
   const row = selectOneStmt.get(id);
   if (!row) return res.status(404).json({ error: 'not_found' });
-  res.json(row);
+  res.json(shapeRow(row));
 });
 
 router.post('/', (req, res) => {
@@ -70,6 +100,9 @@ router.post('/', (req, res) => {
       name: d.name,
       system_prompt: d.system_prompt,
       output_schema: d.output_schema ?? null,
+      output_params:
+        d.output_params == null ? null : JSON.stringify(d.output_params),
+      model: d.model ?? null,
       is_default: d.is_default ?? 0,
       enabled: d.enabled ?? 1,
       created_at: Math.floor(Date.now() / 1000),
@@ -77,7 +110,7 @@ router.post('/', (req, res) => {
     return info.lastInsertRowid;
   });
   const id = tx();
-  res.status(201).json(selectOneStmt.get(id));
+  res.status(201).json(shapeRow(selectOneStmt.get(id)));
 });
 
 router.put('/:id', (req, res) => {
@@ -101,6 +134,13 @@ router.put('/:id', (req, res) => {
   if (d.name !== undefined) assign('name', d.name);
   if (d.system_prompt !== undefined) assign('system_prompt', d.system_prompt);
   if (d.output_schema !== undefined) assign('output_schema', d.output_schema);
+  if (d.output_params !== undefined) {
+    assign(
+      'output_params',
+      d.output_params == null ? null : JSON.stringify(d.output_params),
+    );
+  }
+  if (d.model !== undefined) assign('model', d.model);
   if (d.is_default !== undefined) assign('is_default', d.is_default);
   if (d.enabled !== undefined) assign('enabled', d.enabled);
 
@@ -113,7 +153,7 @@ router.put('/:id', (req, res) => {
   });
   tx();
 
-  res.json(selectOneStmt.get(id));
+  res.json(shapeRow(selectOneStmt.get(id)));
 });
 
 // POST /api/prompts/:id/test — прогон промта через LLM на заданном или последнем письме.
@@ -180,8 +220,12 @@ router.post('/:id/test', async (req, res) => {
   const t0 = Date.now();
   try {
     const out = await classify({
-      systemPrompt: prompt.system_prompt,
+      systemPrompt: composeSystemPrompt(prompt.system_prompt, {
+        params: prompt.output_params,
+        schemaJson: prompt.output_schema,
+      }),
       userPrompt,
+      ...(prompt.model ? { model: prompt.model } : {}),
     });
     return res.json({
       ok: true,

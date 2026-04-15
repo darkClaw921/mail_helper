@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS prompts (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   name          TEXT    NOT NULL,
   system_prompt TEXT    NOT NULL,
-  output_schema TEXT,
+  output_schema TEXT,                    -- raw JSON-schema (advanced override, optional)
+  output_params TEXT,                    -- JSON-array of {key,type,description,required?}
+  model         TEXT,
   is_default    INTEGER DEFAULT 0,
   enabled       INTEGER DEFAULT 1,
   created_at    INTEGER
@@ -64,6 +66,7 @@ CREATE TABLE IF NOT EXISTS messages (
   is_important        INTEGER DEFAULT 0,
   classification_json TEXT,
   prompt_id           INTEGER,
+  tokens_used         INTEGER,                   -- total_tokens от LLM классификации
   created_at          INTEGER,
   UNIQUE(account_id, uid)
 );
@@ -73,6 +76,22 @@ CREATE INDEX IF NOT EXISTS messages_account_date
 
 CREATE INDEX IF NOT EXISTS messages_unread
   ON messages(account_id, is_read);
+
+-- Журнал запусков действий (action). Пишется в runner.js после matched dispatch.
+-- tokens_used берётся из messages.tokens_used на момент запуска (LLM-стоимость
+-- классификации письма, которое триггернуло action).
+CREATE TABLE IF NOT EXISTS action_runs (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  action_id    INTEGER NOT NULL REFERENCES actions(id) ON DELETE CASCADE,
+  message_id   INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+  ok           INTEGER NOT NULL DEFAULT 0,
+  error        TEXT,
+  tokens_used  INTEGER,
+  created_at   INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS action_runs_action_id ON action_runs(action_id);
+CREATE INDEX IF NOT EXISTS action_runs_created_at ON action_runs(created_at DESC);
 
 -- Глобальные настройки (всегда шифруемые AES-GCM)
 CREATE TABLE IF NOT EXISTS settings (

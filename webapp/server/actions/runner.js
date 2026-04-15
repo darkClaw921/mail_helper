@@ -26,7 +26,11 @@ import { mailEvents } from '../mail/events.js';
 import { db } from '../db/index.js';
 import { decrypt } from '../db/crypto.js';
 import { logger } from '../logger.js';
-import { compile as compileExpr } from './evaluator.js';
+import {
+  compile as compileExpr,
+  DEFAULT_ALLOWED_IDENTIFIERS,
+} from './evaluator.js';
+import { parseOutputParams } from '../llm/classifier.js';
 import { sendTelegram } from './telegram.js';
 import { sendWebhook } from './webhook.js';
 import { forwardAction } from './forward.js';
@@ -45,6 +49,56 @@ const selectActionsStmt = db.prepare(
       AND (prompt_id IS NULL OR prompt_id = @prompt_id)
     ORDER BY id`,
 );
+const selectPromptParamsStmt = db.prepare(
+  'SELECT output_params FROM prompts WHERE id = ?',
+);
+const selectMessageTokensStmt = db.prepare(
+  'SELECT tokens_used FROM messages WHERE id = ?',
+);
+const insertActionRunStmt = db.prepare(
+  `INSERT INTO action_runs (action_id, message_id, ok, error, tokens_used, created_at)
+   VALUES (@action_id, @message_id, @ok, @error, @tokens_used, @created_at)`,
+);
+
+/**
+ * Пишет журнал запуска action. Никогда не кидает — любой fail логируется.
+ */
+function logActionRun({ actionId, messageId, ok, error, tokensUsed }) {
+  try {
+    insertActionRunStmt.run({
+      action_id: actionId,
+      message_id: messageId ?? null,
+      ok: ok ? 1 : 0,
+      error: error == null ? null : String(error).slice(0, 500),
+      tokens_used: Number.isFinite(tokensUsed) ? tokensUsed : null,
+      created_at: Math.floor(Date.now() / 1000),
+    });
+  } catch (err) {
+    log.warn({ err: err?.message || String(err), action_id: actionId }, 'action_runs insert failed');
+  }
+}
+
+/**
+ * Кэш-наивная резолюция whitelist идентификаторов для конкретного action.
+ * Приоритет:
+ *   1. action.prompt_id задан и у промта есть output_params → union(defaults, keys)
+ *   2. Передан promptArg с output_params → union(defaults, keys)
+ *   3. Иначе — дефолты (important/reason/tags/summary).
+ */
+function resolveAllowedIdentifiers(action, promptArg) {
+  const out = new Set(DEFAULT_ALLOWED_IDENTIFIERS);
+  let paramsRaw = null;
+  if (action.prompt_id != null) {
+    const row = selectPromptParamsStmt.get(action.prompt_id);
+    paramsRaw = row ? row.output_params : null;
+  } else if (promptArg && promptArg.output_params != null) {
+    paramsRaw = promptArg.output_params;
+  }
+  for (const p of parseOutputParams(paramsRaw)) {
+    out.add(p.key);
+  }
+  return out;
+}
 
 function decryptConfig(row) {
   if (!row.config_enc) return {};
@@ -119,10 +173,12 @@ export async function runActionsForMessage(message, classification, prompt = nul
       continue;
     }
 
-    // Компилируем match_expr; пустая строка / парс-ошибка => not matched, логируем
+    // Компилируем match_expr; пустая строка / парс-ошибка => not matched, логируем.
+    // Whitelist идентификаторов берём из output_params привязанного промта (union с дефолтами).
     let matched;
     try {
-      const fn = compileExpr(row.match_expr);
+      const allowed = resolveAllowedIdentifiers(row, prompt);
+      const fn = compileExpr(row.match_expr, allowed);
       matched = fn(classification || {});
     } catch (err) {
       log.error(
@@ -158,23 +214,56 @@ export async function runActionsForMessage(message, classification, prompt = nul
     }
 
     const enriched = { ...row, config };
+    // Tokens attribution: стоимость LLM-классификации письма, которое
+    // триггернуло этот action. Берём из messages.tokens_used (свежее чтение
+    // на случай если classifier только что обновил запись).
+    let tokensUsed = null;
+    try {
+      const mrow = message?.id ? selectMessageTokensStmt.get(message.id) : null;
+      tokensUsed = mrow && Number.isFinite(mrow.tokens_used) ? mrow.tokens_used : null;
+    } catch {
+      tokensUsed = null;
+    }
     pending.push(
       dispatchAction(enriched, message, classification).then(
-        (res) => ({
-          action_id: row.id,
-          type: row.type,
-          matched: true,
-          ok: !!res?.ok,
-          error: res?.ok ? undefined : res?.error || 'unknown error',
-        }),
+        (res) => {
+          const ok = !!res?.ok;
+          const error = ok ? undefined : res?.error || 'unknown error';
+          logActionRun({
+            actionId: row.id,
+            messageId: message?.id ?? null,
+            ok,
+            error,
+            tokensUsed,
+          });
+          return {
+            action_id: row.id,
+            type: row.type,
+            matched: true,
+            ok,
+            error,
+            tokens_used: tokensUsed,
+          };
+        },
         // dispatchAction сам не должен кидать, но на всякий случай
-        (err) => ({
-          action_id: row.id,
-          type: row.type,
-          matched: true,
-          ok: false,
-          error: err?.message || String(err),
-        }),
+        (err) => {
+          const error = err?.message || String(err);
+          logActionRun({
+            actionId: row.id,
+            messageId: message?.id ?? null,
+            ok: false,
+            error,
+            tokensUsed,
+          });
+          return {
+            action_id: row.id,
+            type: row.type,
+            matched: true,
+            ok: false,
+            error,
+            tokens_used: tokensUsed,
+          };
+        },
       ),
     );
   }

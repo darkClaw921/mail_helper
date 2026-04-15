@@ -35,9 +35,39 @@
 //   evaluate('important && !tags.includes("spam")', { important:true, tags:[] }) // true
 //   evaluate('process.exit(1)', {})                                      // throws
 
-export const ALLOWED_IDENTIFIERS = Object.freeze(['important', 'reason', 'tags', 'summary']);
-const ALLOWED_IDENT_SET = new Set(ALLOWED_IDENTIFIERS);
+// Дефолтный whitelist — поля JSON-контракта из семечного промта. Исторически
+// использовался как единственный источник имён. Начиная с рефакторинга
+// output_params, whitelist передаётся динамически через второй аргумент compile();
+// если не передан — работает back-compat на этих дефолтах.
+export const DEFAULT_ALLOWED_IDENTIFIERS = Object.freeze([
+  'important',
+  'reason',
+  'tags',
+  'summary',
+]);
+// Back-compat алиас (оставляем имя ALLOWED_IDENTIFIERS экспортированным).
+export const ALLOWED_IDENTIFIERS = DEFAULT_ALLOWED_IDENTIFIERS;
 const ALLOWED_METHODS = new Set(['includes']);
+
+/**
+ * Превращает список ident-имён в Set с валидацией (только валидные JS-identifier-имена).
+ * @param {Iterable<string>|null|undefined} idents
+ * @returns {Set<string>}
+ */
+function makeIdentSet(idents) {
+  const src = idents && idents[Symbol.iterator] ? idents : DEFAULT_ALLOWED_IDENTIFIERS;
+  const out = new Set();
+  for (const name of src) {
+    if (typeof name !== 'string') continue;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
+    out.add(name);
+  }
+  if (out.size === 0) {
+    // ни одного валидного — падаем обратно на дефолт, чтобы evaluator был полезен
+    for (const n of DEFAULT_ALLOWED_IDENTIFIERS) out.add(n);
+  }
+  return out;
+}
 
 // --- Lexer ---------------------------------------------------------------
 
@@ -215,7 +245,7 @@ function tokenize(src) {
 //   IdentOrCall := IDENT ('.' IDENT '(' OrExpr ')')?
 //   Literal  := NUMBER | STRING | TRUE | FALSE | NULL
 
-function parse(tokens) {
+function parse(tokens, allowedIdentSet) {
   let pos = 0;
 
   function peek() {
@@ -315,9 +345,9 @@ function parse(tokens) {
   function parseIdentOrCall() {
     const identTok = consume(TOKEN.IDENT);
     const name = identTok.value;
-    if (!ALLOWED_IDENT_SET.has(name)) {
+    if (!allowedIdentSet.has(name)) {
       throw new Error(
-        `evaluator: identifier '${name}' is not allowed (allowed: ${ALLOWED_IDENTIFIERS.join(', ')})`,
+        `evaluator: identifier '${name}' is not allowed (allowed: ${[...allowedIdentSet].join(', ')})`,
       );
     }
     // опциональный .method(arg)
@@ -347,40 +377,46 @@ function parse(tokens) {
 
 // --- Interpreter ---------------------------------------------------------
 
-function evalNode(node, context) {
+function evalNode(node, context, allowedIdentSet) {
   switch (node.kind) {
     case 'Literal':
       return node.value;
     case 'Ident':
       // достаём только whitelisted — остальные заброшены на этапе парсинга,
       // но на всякий случай повторно проверяем.
-      if (!ALLOWED_IDENT_SET.has(node.name)) {
+      if (!allowedIdentSet.has(node.name)) {
         throw new Error(`evaluator: identifier '${node.name}' is not allowed`);
       }
       return context ? context[node.name] : undefined;
     case 'Not':
-      return !evalNode(node.expr, context);
+      return !evalNode(node.expr, context, allowedIdentSet);
     case 'And': {
-      const l = evalNode(node.left, context);
+      const l = evalNode(node.left, context, allowedIdentSet);
       if (!l) return l;
-      return evalNode(node.right, context);
+      return evalNode(node.right, context, allowedIdentSet);
     }
     case 'Or': {
-      const l = evalNode(node.left, context);
+      const l = evalNode(node.left, context, allowedIdentSet);
       if (l) return l;
-      return evalNode(node.right, context);
+      return evalNode(node.right, context, allowedIdentSet);
     }
     case 'Eq':
       // Используем строгое равенство — операнды детерминированные (литералы + whitelist).
-      return evalNode(node.left, context) === evalNode(node.right, context);
+      return (
+        evalNode(node.left, context, allowedIdentSet) ===
+        evalNode(node.right, context, allowedIdentSet)
+      );
     case 'Neq':
-      return evalNode(node.left, context) !== evalNode(node.right, context);
+      return (
+        evalNode(node.left, context, allowedIdentSet) !==
+        evalNode(node.right, context, allowedIdentSet)
+      );
     case 'MethodCall': {
-      if (!ALLOWED_IDENT_SET.has(node.object)) {
+      if (!allowedIdentSet.has(node.object)) {
         throw new Error(`evaluator: identifier '${node.object}' is not allowed`);
       }
       const obj = context ? context[node.object] : undefined;
-      const arg = evalNode(node.arg, context);
+      const arg = evalNode(node.arg, context, allowedIdentSet);
       if (node.method === 'includes') {
         if (Array.isArray(obj)) return obj.includes(arg);
         if (typeof obj === 'string') return typeof arg === 'string' && obj.includes(arg);
@@ -397,28 +433,37 @@ function evalNode(node, context) {
 /**
  * Спарсить выражение в переиспользуемый evaluator.
  * @param {string} expression
+ * @param {Iterable<string>} [allowedIdentifiers] — кастомный whitelist имён.
+ *     Если не передан — используется DEFAULT_ALLOWED_IDENTIFIERS (back-compat).
  * @returns {(context: object) => boolean}
  */
-export function compile(expression) {
+export function compile(expression, allowedIdentifiers) {
   if (typeof expression !== 'string') {
     throw new TypeError('evaluator: expression must be a string');
   }
   if (expression.trim() === '') {
     throw new Error('evaluator: expression is empty');
   }
+  const allowedSet = makeIdentSet(allowedIdentifiers);
   const tokens = tokenize(expression);
-  const ast = parse(tokens);
-  return (context) => Boolean(evalNode(ast, context || {}));
+  const ast = parse(tokens, allowedSet);
+  return (context) => Boolean(evalNode(ast, context || {}, allowedSet));
 }
 
 /**
  * Одноразовая оценка выражения.
  * @param {string} expression
- * @param {object} context — { important?, reason?, tags?, summary? }
+ * @param {object} context — { important?, reason?, tags?, summary?, <custom params> }
+ * @param {Iterable<string>} [allowedIdentifiers]
  * @returns {boolean}
  */
-export function evaluate(expression, context) {
-  return compile(expression)(context);
+export function evaluate(expression, context, allowedIdentifiers) {
+  return compile(expression, allowedIdentifiers)(context);
 }
 
-export default { evaluate, compile, ALLOWED_IDENTIFIERS };
+export default {
+  evaluate,
+  compile,
+  ALLOWED_IDENTIFIERS,
+  DEFAULT_ALLOWED_IDENTIFIERS,
+};

@@ -36,6 +36,14 @@ const selectAllStmt = db.prepare(
 const selectOneStmt = db.prepare(
   'SELECT id, name, prompt_id, match_expr, type, config_enc, enabled FROM actions WHERE id = ?',
 );
+// Агрегаты запусков действия (для отображения «Токены: N · Срабатываний: M»).
+const selectActionStatsStmt = db.prepare(
+  `SELECT COUNT(*)                          AS runs_total,
+          COALESCE(SUM(CASE WHEN ok=1 THEN 1 ELSE 0 END), 0) AS runs_ok,
+          COALESCE(SUM(tokens_used), 0)     AS tokens_total,
+          MAX(created_at)                   AS last_run_at
+     FROM action_runs WHERE action_id = ?`,
+);
 const insertStmt = db.prepare(
   'INSERT INTO actions (name, prompt_id, match_expr, type, config_enc, enabled) ' +
     'VALUES (@name, @prompt_id, @match_expr, @type, @config_enc, @enabled)',
@@ -53,7 +61,21 @@ function rowToApi(row) {
     }
   }
   const { config_enc, ...rest } = row;
-  return { ...rest, config };
+  let stats = { runs_total: 0, runs_ok: 0, tokens_total: 0, last_run_at: null };
+  try {
+    const s = selectActionStatsStmt.get(row.id);
+    if (s) {
+      stats = {
+        runs_total: s.runs_total ?? 0,
+        runs_ok: s.runs_ok ?? 0,
+        tokens_total: s.tokens_total ?? 0,
+        last_run_at: s.last_run_at ?? null,
+      };
+    }
+  } catch {
+    /* fallback: пустые агрегаты */
+  }
+  return { ...rest, config, stats };
 }
 
 router.get('/', (_req, res) => {
@@ -116,6 +138,33 @@ router.put('/:id', (req, res) => {
     db.prepare(`UPDATE actions SET ${sets.join(', ')} WHERE id = @id`).run(values);
   }
   res.json(rowToApi(selectOneStmt.get(id)));
+});
+
+// POST /api/actions/:id/test — stub для кнопки «Запустить тест» в редакторе правил.
+// Принимает опциональный { messageId } (не используется в stub-версии; оставлено
+// в API на будущее для реального dry-run). Возвращает синтетический preview
+// с триггером (match_expr) и типом action. Реальный evaluator+dispatcher
+// подключим позже отдельной задачей.
+router.post('/:id/test', (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+  const row = selectOneStmt.get(id);
+  if (!row) return res.status(404).json({ error: 'not_found' });
+
+  // messageId сейчас игнорируется — это stub. Считываем только чтобы
+  // клиент мог начать его присылать прямо сейчас, не ломая совместимость.
+  const _messageId = req.body?.messageId;
+  void _messageId;
+
+  res.json({
+    ok: true,
+    matched: true,
+    preview: {
+      trigger: row.match_expr,
+      action_type: row.type,
+      would_execute: true,
+    },
+  });
 });
 
 router.delete('/:id', (req, res) => {

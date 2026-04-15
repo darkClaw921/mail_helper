@@ -32,6 +32,7 @@ async function loadSettings() {
     'backend_url',
     'api_key',
     'notify_important',
+    'notify_sound',
   ]);
   // Не подставляем дефолтный URL — пользователь должен явно указать сервер,
   // чтобы расширение не лезло в произвольный localhost без разрешения.
@@ -41,18 +42,20 @@ async function loadSettings() {
   document.getElementById('api-key').value = stored.api_key || '';
   document.getElementById('notify-important').checked =
     stored.notify_important !== false; // default true
+  const soundEl = document.getElementById('notify-sound');
+  if (soundEl) soundEl.checked = stored.notify_sound === true; // default off
 }
 
 /** Показывает статус-баннер. */
 function setStatus(kind, text) {
   const el = document.getElementById('status');
-  el.className = `status visible ${kind}`;
+  el.className = `opt-status visible ${kind}`;
   el.textContent = text;
 }
 
 function clearStatus() {
   const el = document.getElementById('status');
-  el.className = 'status';
+  el.className = 'opt-status';
   el.textContent = '';
 }
 
@@ -89,8 +92,16 @@ async function onSaveClick() {
 /** Сохраняет чекбокс notify_important отдельно. */
 async function onSaveNotifyClick() {
   const checked = document.getElementById('notify-important').checked;
-  await chrome.storage.local.set({ notify_important: checked });
-  setStatus('ok', `Notifications for important messages: ${checked ? 'ON' : 'OFF'}`);
+  const soundEl = document.getElementById('notify-sound');
+  const sound = soundEl ? soundEl.checked : false;
+  await chrome.storage.local.set({
+    notify_important: checked,
+    notify_sound: sound,
+  });
+  setStatus(
+    'ok',
+    `Уведомления: важные ${checked ? 'ON' : 'OFF'} · звук ${sound ? 'ON' : 'OFF'}`,
+  );
 }
 
 /** Тестирует коннект: сперва /api/health (публичный), потом /api/messages. */

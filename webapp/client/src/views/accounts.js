@@ -1,17 +1,28 @@
-// View /accounts — список аккаунтов IMAP/SMTP + форма создания/редактирования.
+// views/accounts.js — модуль аккаунтов: AccountCard + Модалка-редактор.
+//
+// После Phase 3 редизайна это уже не отдельный view, а модуль с двумя
+// публичными экспортами:
+//
+//   - renderAccountCard(account, { onConfigure, onDisconnect }) → HTMLElement
+//     Карточка аккаунта (логотип провайдера, email, статус синхронизации,
+//     last sync, кнопки «Настроить» и «Отключить»). Используется в
+//     dashboard.js и settings.js.
+//
+//   - openAccountModal({ existingAccount, onSave, onClose }) → HTMLElement
+//     Создаёт overlay-модалку с формой IMAP/SMTP. Поддерживает пресеты
+//     Gmail/Yandex/Beget, инициальную синхронизацию истории, безопасные
+//     обновления паролей. Сохраняет через POST /api/accounts либо
+//     PUT /api/accounts/:id.
+//
+// Также сохранён `renderAccounts(root)` — для обратной совместимости с
+// возможными прямыми вызовами; рендерит карточки + кнопку «+ Подключить».
 
 import { accountsApi } from '../api.js';
-import {
-  h,
-  field,
-  input,
-  textarea, // eslint-disable-line no-unused-vars
-  checkbox,
-  button,
-  showError,
-  escapeHtml,
-  formToObject,
-} from './util.js';
+import { Modal, Button, EmptyState, TagBadge } from '../components/ui.js';
+import { icon as renderIcon } from '../components/icons.js';
+import { h, formatRelative, statusDot, showError } from './util.js';
+
+/* ------------------------------- Пресеты ------------------------------- */
 
 const PRESETS = {
   gmail: {
@@ -49,39 +60,119 @@ const PRESETS = {
   },
 };
 
-function accountForm({ account = null, onSubmit, onCancel } = {}) {
-  const isEdit = !!account;
-  const form = h('form', { class: 'grid grid-cols-2 gap-3 rounded bg-white p-4 shadow-sm' });
-  const acc = account || {};
+/* ------------------------------ Хелперы UI ----------------------------- */
 
-  form.appendChild(
-    h('h2', { class: 'col-span-2 text-lg font-semibold', text: isEdit ? 'Редактировать аккаунт' : 'Новый аккаунт' }),
-  );
+/**
+ * По email/host угадывает короткий код провайдера для отображения логотипа.
+ * @param {object} acc
+ * @returns {'gmail'|'yandex'|'beget'|'other'}
+ */
+function guessProvider(acc) {
+  const email = (acc?.email || '').toLowerCase();
+  const host = (acc?.imap_host || '').toLowerCase();
+  if (email.endsWith('@gmail.com') || host.includes('gmail')) return 'gmail';
+  if (email.endsWith('@yandex.ru') || email.endsWith('@ya.ru') || host.includes('yandex')) return 'yandex';
+  if (host.includes('beget')) return 'beget';
+  return 'other';
+}
 
-  // Preset-селектор (только для нового аккаунта, чтобы не затирать редактируемые значения случайно)
-  const hintBox = h('div', {
-    class: 'col-span-2 hidden rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-900',
-  });
-  if (!isEdit) {
-    const presetSelect = h(
-      'select',
-      {
-        class: 'rounded border border-slate-300 bg-white px-2 py-1 text-sm',
-        onchange: (e) => applyPreset(e.target.value),
-      },
-      [
-        h('option', { value: '' }, '— пресет —'),
-        h('option', { value: 'gmail' }, 'Gmail'),
-        h('option', { value: 'yandex' }, 'Yandex'),
-        h('option', { value: 'beget' }, 'Beget'),
-      ],
-    );
-    form.appendChild(
-      h('div', { class: 'col-span-2 flex items-center gap-2' }, [
-        h('span', { class: 'text-sm font-medium text-slate-700', text: 'Быстрое заполнение:' }),
-        presetSelect,
+const PROVIDER_META = {
+  gmail: { label: 'Gmail', accent: 'red', icon: 'mail' },
+  yandex: { label: 'Yandex', accent: 'orange', icon: 'mail' },
+  beget: { label: 'Beget', accent: 'cyan', icon: 'mail' },
+  other: { label: 'IMAP', accent: 'purple', icon: 'mail' },
+};
+
+/**
+ * Карточка аккаунта (для dashboard и settings).
+ * @param {object} account
+ * @param {{ onConfigure?: Function, onDisconnect?: Function }} handlers
+ * @returns {HTMLElement}
+ */
+export function renderAccountCard(account, handlers = {}) {
+  const { onConfigure, onDisconnect } = handlers;
+  const providerKey = guessProvider(account);
+  const meta = PROVIDER_META[providerKey];
+
+  const enabled = account.enabled !== 0;
+  const lastSync = account.last_fetched_at || account.updated_at || account.created_at;
+  const statusKey = enabled ? 'active' : 'paused';
+  const statusLabel = enabled ? 'Подключено' : 'Отключено';
+
+  const header = h('div', { class: 'flex items-start justify-between gap-3' }, [
+    h('div', { class: 'flex items-center gap-3 min-w-0' }, [
+      // Логотип провайдера
+      (() => {
+        const tile = document.createElement('div');
+        tile.className = 'flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)] shrink-0';
+        tile.style.backgroundColor = `color-mix(in srgb, var(--color-accent-${meta.accent}) 14%, transparent)`;
+        tile.style.color = `var(--color-accent-${meta.accent})`;
+        tile.appendChild(renderIcon(meta.icon, { size: 20 }));
+        return tile;
+      })(),
+      h('div', { class: 'min-w-0' }, [
+        h('div', { class: 'text-sm font-semibold text-[color:var(--color-text-primary)] truncate', text: meta.label }),
+        h('div', { class: 'text-xs text-[color:var(--color-text-secondary)] truncate', text: account.email || account.label || '—' }),
       ]),
-    );
+    ]),
+    TagBadge({ label: statusLabel, variant: enabled ? 'green' : 'neutral' }),
+  ]);
+
+  const meta1 = h('div', { class: 'flex items-center gap-2 text-xs text-[color:var(--color-text-secondary)]' }, [
+    statusDot(statusKey),
+    h('span', { text: lastSync ? `Последняя синхронизация: ${formatRelative(lastSync)}` : 'Синхронизация не выполнялась' }),
+  ]);
+
+  const buttons = h('div', { class: 'flex items-center gap-2 mt-1' }, [
+    Button({
+      label: 'Настроить',
+      variant: 'ghost',
+      size: 'sm',
+      icon: 'settings',
+      onClick: () => onConfigure?.(account),
+    }),
+    Button({
+      label: 'Отключить',
+      variant: 'danger',
+      size: 'sm',
+      icon: 'trash',
+      onClick: () => onDisconnect?.(account),
+    }),
+  ]);
+
+  const card = document.createElement('div');
+  card.className = 'card flex flex-col gap-3';
+  card.append(header, meta1, buttons);
+  return card;
+}
+
+/* ----------------------------- Форма аккаунта -------------------------- */
+
+/**
+ * Внутренняя фабрика формы. Возвращает {form, getPayload}.
+ */
+function buildAccountForm(existingAccount) {
+  const acc = existingAccount || {};
+  const isEdit = !!existingAccount;
+  const form = h('form', { class: 'grid grid-cols-2 gap-3' });
+
+  const hintBox = h('div', {
+    class: 'col-span-2 hidden rounded border border-[color:var(--color-accent-purple)] bg-[color:color-mix(in_srgb,var(--color-accent-purple)_8%,transparent)] px-3 py-2 text-xs text-[color:var(--color-accent-purple)]',
+  });
+
+  if (!isEdit) {
+    const presetWrap = h('div', { class: 'col-span-2 flex items-center gap-2' }, [
+      h('span', { class: 'text-sm font-medium text-[color:var(--color-text-primary)]', text: 'Быстрое заполнение:' }),
+    ]);
+    const presetSelect = h('select', { class: 'select max-w-[12rem]' }, [
+      h('option', { value: '' }, '— пресет —'),
+      h('option', { value: 'gmail' }, 'Gmail'),
+      h('option', { value: 'yandex' }, 'Yandex'),
+      h('option', { value: 'beget' }, 'Beget'),
+    ]);
+    presetSelect.addEventListener('change', (e) => applyPreset(e.target.value));
+    presetWrap.appendChild(presetSelect);
+    form.appendChild(presetWrap);
     form.appendChild(hintBox);
   }
 
@@ -106,7 +197,6 @@ function accountForm({ account = null, onSubmit, onCancel } = {}) {
     setField('smtp_port', p.smtp_port);
     setField('smtp_tls', p.smtp_tls);
     setField('folder', p.folder);
-    // imap_user/smtp_user заполняем email-ом если он уже введён
     const emailVal = form.elements.namedItem('email')?.value || '';
     if (emailVal) {
       setField('imap_user', emailVal);
@@ -116,39 +206,71 @@ function accountForm({ account = null, onSubmit, onCancel } = {}) {
     hintBox.classList.remove('hidden');
   }
 
-  form.appendChild(field('Label', input({ name: 'label', value: acc.label })));
-  form.appendChild(field('Email', input({ name: 'email', type: 'email', value: acc.email })));
-  form.appendChild(field('IMAP host', input({ name: 'imap_host', value: acc.imap_host })));
-  form.appendChild(field('IMAP port', input({ name: 'imap_port', type: 'number', value: acc.imap_port })));
-  form.appendChild(field('IMAP user', input({ name: 'imap_user', value: acc.imap_user })));
-  form.appendChild(
-    field(
-      `IMAP password${acc.has_imap_pass ? ' (задан — пусто = не менять)' : ''}`,
-      input({ name: 'imap_pass', type: 'password' }),
-    ),
-  );
-  form.appendChild(field('SMTP host', input({ name: 'smtp_host', value: acc.smtp_host })));
-  form.appendChild(field('SMTP port', input({ name: 'smtp_port', type: 'number', value: acc.smtp_port })));
-  form.appendChild(field('SMTP user', input({ name: 'smtp_user', value: acc.smtp_user })));
-  form.appendChild(
-    field(
-      `SMTP password${acc.has_smtp_pass ? ' (задан — пусто = не менять)' : ''}`,
-      input({ name: 'smtp_pass', type: 'password' }),
-    ),
-  );
-  form.appendChild(field('Folder', input({ name: 'folder', value: acc.folder ?? 'INBOX' })));
+  // Простые именованные поля. Используем нативные input/select напрямую
+  // чтобы field name работал внутри form.elements.namedItem.
+  function fieldRow(labelText, control, full = false) {
+    const wrap = h('label', { class: `flex flex-col gap-1 text-sm${full ? ' col-span-2' : ''}` }, [
+      h('span', { class: 'text-sm font-medium text-[color:var(--color-text-primary)]', text: labelText }),
+      control,
+    ]);
+    return wrap;
+  }
+  function inp(opts) {
+    const el = document.createElement('input');
+    el.className = 'input';
+    el.name = opts.name;
+    if (opts.type) el.type = opts.type;
+    if (opts.placeholder) el.placeholder = opts.placeholder;
+    if (opts.value !== undefined && opts.value !== null) el.value = String(opts.value);
+    return el;
+  }
+  function chk(name, checked) {
+    const el = document.createElement('input');
+    el.type = 'checkbox';
+    el.name = name;
+    el.checked = !!checked;
+    el.className = 'h-4 w-4 accent-[color:var(--color-accent-purple)]';
+    return el;
+  }
+  function chkLabel(name, checked, text) {
+    return h('label', { class: 'inline-flex items-center gap-2 text-sm text-[color:var(--color-text-primary)]' }, [
+      chk(name, checked),
+      h('span', { text }),
+    ]);
+  }
 
-  // Первичная синхронизация истории писем.
-  // UI: чекбокс + селект (none / all / 10 / 50 / 100 / 500 / custom) + number-input.
-  const syncWrap = h('div', { class: 'col-span-2 rounded border border-slate-200 bg-slate-50 p-2' });
+  form.appendChild(fieldRow('Label', inp({ name: 'label', value: acc.label })));
+  form.appendChild(fieldRow('Email', inp({ name: 'email', type: 'email', value: acc.email })));
+  form.appendChild(fieldRow('IMAP host', inp({ name: 'imap_host', value: acc.imap_host })));
+  form.appendChild(fieldRow('IMAP port', inp({ name: 'imap_port', type: 'number', value: acc.imap_port })));
+  form.appendChild(fieldRow('IMAP user', inp({ name: 'imap_user', value: acc.imap_user })));
+  form.appendChild(
+    fieldRow(
+      `IMAP password${acc.has_imap_pass ? ' (задан — пусто = не менять)' : ''}`,
+      inp({ name: 'imap_pass', type: 'password' }),
+    ),
+  );
+  form.appendChild(fieldRow('SMTP host', inp({ name: 'smtp_host', value: acc.smtp_host })));
+  form.appendChild(fieldRow('SMTP port', inp({ name: 'smtp_port', type: 'number', value: acc.smtp_port })));
+  form.appendChild(fieldRow('SMTP user', inp({ name: 'smtp_user', value: acc.smtp_user })));
+  form.appendChild(
+    fieldRow(
+      `SMTP password${acc.has_smtp_pass ? ' (задан — пусто = не менять)' : ''}`,
+      inp({ name: 'smtp_pass', type: 'password' }),
+    ),
+  );
+  form.appendChild(fieldRow('Folder', inp({ name: 'folder', value: acc.folder ?? 'INBOX' })));
+
+  // Initial sync — упрощенная версия (selectbox + custom number).
   const currentSync = acc.initial_sync_count;
   const wantSync = currentSync !== null && currentSync !== undefined && currentSync !== 0;
-  const presetValue = currentSync === -1 ? 'all' : [10, 50, 100, 500].includes(currentSync) ? String(currentSync) : wantSync ? 'custom' : '';
+  const presetValue =
+    currentSync === -1 ? 'all' : [10, 50, 100, 500].includes(currentSync) ? String(currentSync) : wantSync ? 'custom' : '';
 
-  const syncCheckbox = h('input', { type: 'checkbox', class: 'mr-2', name: '__sync_on' });
-  syncCheckbox.checked = wantSync;
+  const syncWrap = h('div', { class: 'col-span-2 rounded-[var(--radius-md)] border border-[color:var(--color-border-subtle)] bg-[color:var(--color-bg-elevated)] p-3' });
 
-  const syncPreset = h('select', { class: 'rounded border border-slate-300 bg-white px-2 py-1 text-sm', name: '__sync_preset' }, [
+  const syncCheckbox = chk('__sync_on', wantSync);
+  const syncPreset = h('select', { class: 'select w-fit', name: '__sync_preset' }, [
     h('option', { value: 'all' }, 'Все'),
     h('option', { value: '10' }, 'Последние 10'),
     h('option', { value: '50' }, 'Последние 50'),
@@ -157,39 +279,33 @@ function accountForm({ account = null, onSubmit, onCancel } = {}) {
     h('option', { value: 'custom' }, 'Другое число…'),
   ]);
   syncPreset.value = presetValue || 'all';
-
-  const syncCustom = h('input', {
-    type: 'number',
-    min: '1',
-    class: 'w-24 rounded border border-slate-300 px-2 py-1 text-sm',
-    name: '__sync_custom',
-    placeholder: 'N',
-    value: presetValue === 'custom' && typeof currentSync === 'number' ? String(currentSync) : '',
-  });
+  const syncCustom = inp({ name: '__sync_custom', type: 'number', placeholder: 'N',
+    value: presetValue === 'custom' && typeof currentSync === 'number' ? currentSync : '' });
+  syncCustom.classList.add('w-24');
 
   const syncedBadge = acc.initial_synced
-    ? h('span', { class: 'text-xs text-green-700' }, '✓ уже синхронизирован')
+    ? h('span', { class: 'tag tag-green', text: '✓ синхронизирован' })
     : null;
 
-  const updateSyncUI = () => {
+  function updateSyncUI() {
     const on = syncCheckbox.checked;
     syncPreset.disabled = !on;
     syncCustom.style.display = on && syncPreset.value === 'custom' ? 'inline-block' : 'none';
     syncCustom.disabled = !on;
-  };
+  }
   syncCheckbox.addEventListener('change', updateSyncUI);
   syncPreset.addEventListener('change', updateSyncUI);
   updateSyncUI();
 
   syncWrap.appendChild(
-    h('label', { class: 'flex items-center text-sm font-medium text-slate-700' }, [
+    h('label', { class: 'flex items-center gap-2 text-sm font-medium text-[color:var(--color-text-primary)]' }, [
       syncCheckbox,
-      'Синхронизировать старые письма при первом подключении',
+      h('span', { text: 'Синхронизировать старые письма при первом подключении' }),
     ]),
   );
   syncWrap.appendChild(
-    h('div', { class: 'mt-2 flex items-center gap-2 text-sm' }, [
-      h('span', { class: 'text-slate-600' }, 'Количество:'),
+    h('div', { class: 'mt-2 flex items-center gap-2 text-sm flex-wrap' }, [
+      h('span', { class: 'text-[color:var(--color-text-secondary)]', text: 'Количество:' }),
       syncPreset,
       syncCustom,
       syncedBadge,
@@ -197,25 +313,19 @@ function accountForm({ account = null, onSubmit, onCancel } = {}) {
   );
   if (isEdit && acc.initial_synced) {
     syncWrap.appendChild(
-      h('div', { class: 'mt-1 text-xs text-slate-500' }, 'Изменение этого поля сбросит флаг и повторно синхронизирует историю.'),
+      h('div', { class: 'mt-1 text-xs text-[color:var(--color-text-muted)]', text: 'Изменение этого поля сбросит флаг и повторно синхронизирует историю.' }),
     );
   }
   form.appendChild(syncWrap);
 
-  const flags = h('div', { class: 'col-span-2 flex gap-4' }, [
-    checkbox({ name: 'imap_tls', checked: acc.imap_tls !== 0, label: 'IMAP TLS' }),
-    checkbox({ name: 'smtp_tls', checked: acc.smtp_tls !== 0, label: 'SMTP TLS' }),
-    checkbox({ name: 'enabled', checked: acc.enabled !== 0, label: 'Enabled' }),
+  const flagsRow = h('div', { class: 'col-span-2 flex flex-wrap gap-4' }, [
+    chkLabel('imap_tls', acc.imap_tls !== 0, 'IMAP TLS'),
+    chkLabel('smtp_tls', acc.smtp_tls !== 0, 'SMTP TLS'),
+    chkLabel('enabled', acc.enabled !== 0, 'Активен'),
   ]);
-  form.appendChild(flags);
+  form.appendChild(flagsRow);
 
-  const controls = h('div', { class: 'col-span-2 flex gap-2' }, [
-    button(isEdit ? 'Сохранить' : 'Создать', { type: 'submit', variant: 'primary' }),
-    button('Отмена', { variant: 'secondary', onClick: onCancel }),
-  ]);
-  form.appendChild(controls);
-
-  // При blur email — если imap_user/smtp_user пусты, подставить email.
+  // Email blur копирует значение в imap_user/smtp_user если те пусты
   const emailEl = form.elements.namedItem('email');
   if (emailEl) {
     emailEl.addEventListener('blur', () => {
@@ -228,162 +338,192 @@ function accountForm({ account = null, onSubmit, onCancel } = {}) {
     });
   }
 
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const raw = formToObject(form);
-    // В PUT: не отправляем пустые пароли.
-    if (isEdit) {
-      if (!raw.imap_pass) delete raw.imap_pass;
-      if (!raw.smtp_pass) delete raw.smtp_pass;
+  function getPayload() {
+    const out = {};
+    for (const el of form.elements) {
+      if (!el.name) continue;
+      if (el.type === 'checkbox') {
+        out[el.name] = el.checked ? 1 : 0;
+      } else if (el.type === 'number') {
+        out[el.name] = el.value === '' ? null : Number(el.value);
+      } else {
+        out[el.name] = el.value;
+      }
     }
-    // Собираем initial_sync_count из трёх вспомогательных полей.
-    const syncOn = !!raw.__sync_on;
-    const preset = raw.__sync_preset;
-    const custom = raw.__sync_custom;
-    delete raw.__sync_on;
-    delete raw.__sync_preset;
-    delete raw.__sync_custom;
+    if (isEdit) {
+      if (!out.imap_pass) delete out.imap_pass;
+      if (!out.smtp_pass) delete out.smtp_pass;
+    }
+    const syncOn = !!out.__sync_on;
+    const preset = out.__sync_preset;
+    const custom = out.__sync_custom;
+    delete out.__sync_on;
+    delete out.__sync_preset;
+    delete out.__sync_custom;
     if (syncOn) {
-      if (preset === 'all') raw.initial_sync_count = -1;
+      if (preset === 'all') out.initial_sync_count = -1;
       else if (preset === 'custom') {
         const n = Number(custom);
-        raw.initial_sync_count = Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
-      } else raw.initial_sync_count = Number(preset);
+        out.initial_sync_count = Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+      } else out.initial_sync_count = Number(preset);
     } else {
-      raw.initial_sync_count = null;
+      out.initial_sync_count = null;
     }
-    // Пустые строки -> null для необязательных полей (но initial_sync_count уже numeric|null).
-    for (const k of Object.keys(raw)) {
-      if (raw[k] === '') raw[k] = null;
+    for (const k of Object.keys(out)) {
+      if (out[k] === '') out[k] = null;
     }
-    onSubmit(raw);
-  });
-
-  return form;
-}
-
-export async function renderAccounts(root) {
-  const wrapper = h('div', { class: 'space-y-4' });
-  root.appendChild(wrapper);
-
-  const header = h('div', { class: 'flex items-center justify-between' }, [
-    h('h1', { class: 'text-xl font-semibold', text: 'Accounts' }),
-    button('+ Добавить', {
-      onClick: () => {
-        editor.innerHTML = '';
-        editor.appendChild(
-          accountForm({
-            onSubmit: async (payload) => {
-              try {
-                await accountsApi.create(payload);
-                editor.innerHTML = '';
-                refresh();
-              } catch (err) {
-                showError(root, err);
-              }
-            },
-            onCancel: () => {
-              editor.innerHTML = '';
-            },
-          }),
-        );
-      },
-    }),
-  ]);
-  wrapper.appendChild(header);
-
-  const editor = h('div');
-  wrapper.appendChild(editor);
-
-  const tableWrap = h('div', { class: 'overflow-x-auto rounded bg-white shadow-sm' });
-  wrapper.appendChild(tableWrap);
-
-  async function refresh() {
-    tableWrap.innerHTML = '<div class="p-4 text-slate-500">Загрузка…</div>';
-    try {
-      const { accounts } = await accountsApi.list();
-      if (!accounts.length) {
-        tableWrap.innerHTML =
-          '<div class="p-4 text-slate-500">Пока нет аккаунтов. Нажмите «Добавить».</div>';
-        return;
-      }
-      const rows = accounts
-        .map(
-          (a) => `
-          <tr class="border-t">
-            <td class="px-3 py-2 text-sm">${a.id}</td>
-            <td class="px-3 py-2 text-sm">${escapeHtml(a.label)}</td>
-            <td class="px-3 py-2 text-sm">${escapeHtml(a.email)}</td>
-            <td class="px-3 py-2 text-sm">${escapeHtml(a.imap_host ?? '')}:${escapeHtml(a.imap_port ?? '')}</td>
-            <td class="px-3 py-2 text-sm">${a.enabled ? 'on' : 'off'}</td>
-            <td class="px-3 py-2 text-sm space-x-2">
-              <button data-edit="${a.id}" class="text-indigo-600 hover:underline">Edit</button>
-              <button data-del="${a.id}" class="text-red-600 hover:underline">Del</button>
-            </td>
-          </tr>`,
-        )
-        .join('');
-      tableWrap.innerHTML = `
-        <table class="min-w-full">
-          <thead class="bg-slate-100 text-left text-sm">
-            <tr>
-              <th class="px-3 py-2">ID</th>
-              <th class="px-3 py-2">Label</th>
-              <th class="px-3 py-2">Email</th>
-              <th class="px-3 py-2">IMAP</th>
-              <th class="px-3 py-2">Enabled</th>
-              <th class="px-3 py-2"></th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>`;
-
-      tableWrap.querySelectorAll('[data-edit]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const id = Number(btn.getAttribute('data-edit'));
-          try {
-            const acc = await accountsApi.get(id);
-            editor.innerHTML = '';
-            editor.appendChild(
-              accountForm({
-                account: acc,
-                onSubmit: async (payload) => {
-                  try {
-                    await accountsApi.update(id, payload);
-                    editor.innerHTML = '';
-                    refresh();
-                  } catch (err) {
-                    showError(root, err);
-                  }
-                },
-                onCancel: () => {
-                  editor.innerHTML = '';
-                },
-              }),
-            );
-          } catch (err) {
-            showError(root, err);
-          }
-        });
-      });
-      tableWrap.querySelectorAll('[data-del]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const id = Number(btn.getAttribute('data-del'));
-          // eslint-disable-next-line no-alert
-          if (!window.confirm(`Удалить аккаунт #${id}?`)) return;
-          try {
-            await accountsApi.remove(id);
-            refresh();
-          } catch (err) {
-            showError(root, err);
-          }
-        });
-      });
-    } catch (err) {
-      tableWrap.innerHTML = '';
-      showError(root, err);
-    }
+    return out;
   }
 
-  refresh();
+  return { form, getPayload, isEdit };
+}
+
+/* ------------------------------ openAccountModal ----------------------- */
+
+/**
+ * Открывает модалку добавления / редактирования аккаунта и монтирует её в
+ * document.body. Возвращает корневой overlay-элемент (с методом .close()).
+ *
+ * @param {{ existingAccount?: object|null, onSave?: (saved:object)=>void, onClose?: Function }} opts
+ */
+export function openAccountModal({ existingAccount = null, onSave, onClose } = {}) {
+  const isEdit = !!existingAccount;
+  const { form, getPayload } = buildAccountForm(existingAccount);
+
+  const status = h('span', { class: 'text-sm text-[color:var(--color-text-secondary)]' });
+
+  const submit = async () => {
+    const payload = getPayload();
+    status.textContent = 'Сохраняю…';
+    try {
+      let saved;
+      if (isEdit) {
+        saved = await accountsApi.update(existingAccount.id, payload);
+      } else {
+        saved = await accountsApi.create(payload);
+      }
+      status.textContent = '';
+      overlay.close();
+      if (typeof onSave === 'function') onSave(saved);
+    } catch (err) {
+      status.textContent = '';
+      const msg = err?.message || String(err);
+      const banner = h('div', {
+        class: 'rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800',
+        text: msg,
+      });
+      form.prepend(banner);
+      setTimeout(() => banner.remove(), 6000);
+    }
+  };
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submit();
+  });
+
+  const overlay = Modal({
+    title: isEdit ? `Редактирование: ${existingAccount.email || existingAccount.label || ''}` : 'Добавить почтовый аккаунт',
+    children: form,
+    footer: [
+      status,
+      Button({ label: 'Отмена', variant: 'ghost', onClick: () => overlay.close() }),
+      Button({ label: isEdit ? 'Сохранить' : 'Подключить', variant: 'primary', icon: 'check', onClick: submit }),
+    ],
+    onClose,
+  });
+
+  // Шире, чем стандартный max-w-lg — у формы 2-колоночная сетка.
+  const dialog = overlay.querySelector('.card');
+  if (dialog) {
+    dialog.classList.remove('max-w-lg');
+    dialog.classList.add('max-w-2xl');
+  }
+
+  // Esc закрывает модалку.
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      overlay.close();
+      window.removeEventListener('keydown', onKey);
+    }
+  };
+  window.addEventListener('keydown', onKey);
+  const origClose = overlay.close;
+  overlay.close = () => {
+    window.removeEventListener('keydown', onKey);
+    origClose();
+  };
+
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+/* --------------------- renderAccounts (legacy view) -------------------- */
+
+/**
+ * Legacy view-обёртка. После Phase 3 главным потребителем стал settings.js,
+ * но если кто-то всё ещё вызывает напрямую — отрисуем сетку карточек.
+ * @param {HTMLElement} root
+ */
+export async function renderAccounts(root) {
+  root.innerHTML = '';
+  const wrap = h('div', { class: 'flex flex-col gap-4' });
+  root.appendChild(wrap);
+
+  const header = h('div', { class: 'flex items-center justify-between' }, [
+    h('h1', { class: 'text-xl font-semibold text-[color:var(--color-text-primary)]', text: 'Почтовые аккаунты' }),
+  ]);
+  const addBtn = Button({
+    label: 'Подключить аккаунт',
+    icon: 'plus',
+    onClick: () =>
+      openAccountModal({
+        onSave: () => renderAccounts(root),
+      }),
+  });
+  header.appendChild(addBtn);
+  wrap.appendChild(header);
+
+  const grid = h('div', { class: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4' });
+  wrap.appendChild(grid);
+
+  try {
+    const resp = await accountsApi.list();
+    const accounts = Array.isArray(resp) ? resp : resp.accounts || [];
+    if (!accounts.length) {
+      grid.replaceWith(
+        EmptyState({
+          icon: 'mail',
+          title: 'Нет подключённых аккаунтов',
+          description: 'Подключите почтовый ящик, чтобы письма начали поступать в систему.',
+          cta: Button({
+            label: 'Подключить аккаунт',
+            icon: 'plus',
+            onClick: () => openAccountModal({ onSave: () => renderAccounts(root) }),
+          }),
+        }),
+      );
+      return;
+    }
+    for (const acc of accounts) {
+      grid.appendChild(
+        renderAccountCard(acc, {
+          onConfigure: () =>
+            openAccountModal({ existingAccount: acc, onSave: () => renderAccounts(root) }),
+          onDisconnect: async () => {
+            // eslint-disable-next-line no-alert
+            if (!window.confirm(`Отключить ${acc.email || acc.label || '#' + acc.id}?`)) return;
+            try {
+              await accountsApi.remove(acc.id);
+              renderAccounts(root);
+            } catch (err) {
+              showError(root, err);
+            }
+          },
+        }),
+      );
+    }
+  } catch (err) {
+    showError(root, err);
+  }
 }

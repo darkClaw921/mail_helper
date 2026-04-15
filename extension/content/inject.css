@@ -1,6 +1,7 @@
 /* content/inject.css — стили, инжектируемые вместе с content scripts.
- * Задача: зарезервировать правую полосу под iframe с sidebar.
- * CSS переменная --mh-sidebar-width используется обоими content-скриптами
+ * Задача: зарезервировать правую полосу под iframe с overlay-панелью
+ * "Email Plugin Overlay" (Pencil 9OOF5).
+ * CSS-переменная --mh-sidebar-width используется обоими content-скриптами
  * чтобы можно было менять ширину в одном месте. Основной сдвиг контента
  * делается JS-хелпером (устанавливает padding-right на <html> или на
  * корневой контейнер Gmail/Yandex), но если контейнер не найден — эти
@@ -8,13 +9,11 @@
  */
 
 :root {
-  --mh-sidebar-width: 380px;
+  --mh-sidebar-width: 360px;
 }
 
-/* iframe-панель: всегда поверх содержимого, с жёстким z-index.
- * position:fixed и border:0 стоят inline в content script для надёжности,
- * дублируем здесь чтобы расширение работало даже если страница переопределит
- * inline-стиль через CSP/SPA перерисовку. */
+/* iframe-панель: поверх содержимого, с жёстким z-index. Ширина 360px
+ * совпадает с Pencil n4S5G (320 + воздух по краям внутри overlay). */
 iframe.mh-sidebar-frame {
   position: fixed !important;
   top: 0 !important;
@@ -26,7 +25,10 @@ iframe.mh-sidebar-frame {
   padding: 0 !important;
   background: #ffffff !important;
   z-index: 2147483600 !important;
-  box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1) !important;
+  border-radius: 12px !important;
+  box-shadow:
+    0 4px 24px rgba(168, 85, 247, 0.12),
+    0 4px 24px rgba(0, 0, 0, 0.07) !important;
   color-scheme: light !important;
 }
 
@@ -42,14 +44,14 @@ iframe.mh-sidebar-frame.mh-collapsed {
   width: 24px !important;
   height: 24px !important;
   border-radius: 12px !important;
-  background: #2563eb !important;
+  background: #7c3aed !important;
   color: #ffffff !important;
   border: 0 !important;
   font: bold 14px/24px sans-serif !important;
   text-align: center !important;
   cursor: pointer !important;
   z-index: 2147483601 !important;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2) !important;
+  box-shadow: 0 2px 6px rgba(124, 58, 237, 0.35) !important;
   user-select: none !important;
 }
 

@@ -59,3 +59,4 @@ next-env.d.ts
 .beads
 CLAUDE.md
 TODO.md
+*.png

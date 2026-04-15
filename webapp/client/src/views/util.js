@@ -1,4 +1,16 @@
 // Небольшие утилиты для views. Без зависимостей — ванильный DOM.
+//
+// Содержит:
+//  - h(tag, opts, children) — базовая фабрика элемента.
+//  - escapeHtml / formToObject — общие helper'ы.
+//  - formatDate / formatRelative — форматирование дат (ru-RU).
+//  - renderTabs — фабрика таб-контейнера (удобна, когда нужен inline без
+//    компонента из ui.js; сам ui.js также экспортирует Tabs).
+//  - statusDot — цветная точка статуса.
+//  - showError / button / field / input / textarea / select / checkbox —
+//    legacy helpers, которые уже используются во view-модулях. Оставлены
+//    ради обратной совместимости во время поэтапного редизайна; новые
+//    view пишем через components/ui.js.
 
 const HTML_ESCAPES = {
   '&': '&amp;',
@@ -48,7 +60,8 @@ export function showError(root, err) {
 }
 
 /**
- * Простая обёртка для кнопки Tailwind.
+ * Простая обёртка для кнопки Tailwind (legacy — для старых views).
+ * Новые view используют components/ui.js Button().
  */
 export function button(label, { variant = 'primary', type = 'button', onClick } = {}) {
   const cls =
@@ -123,4 +136,128 @@ export function formToObject(form) {
     }
   }
   return out;
+}
+
+/* --------------------- Форматирование --------------------- */
+
+/**
+ * Форматирует абсолютную дату в формате `DD.MM.YYYY HH:MM` (ru-RU).
+ * @param {string|number|Date} value
+ */
+export function formatDate(value) {
+  if (value == null || value === '') return '';
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const RELATIVE_UNITS = [
+  { limit: 60, div: 1, name: 'секунд' },
+  { limit: 3600, div: 60, name: 'минут' },
+  { limit: 86400, div: 3600, name: 'часов' },
+  { limit: 86400 * 7, div: 86400, name: 'дн' },
+  { limit: 86400 * 30, div: 86400 * 7, name: 'нед' },
+  { limit: 86400 * 365, div: 86400 * 30, name: 'мес' },
+];
+
+/**
+ * Возвращает относительное время вида "5 минут назад" / "через 2 часа".
+ * Поддерживает ISO-строку, Date или unix-ms.
+ * @param {string|number|Date} value
+ */
+export function formatRelative(value) {
+  if (value == null || value === '') return '';
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = Date.now();
+  const diffSec = Math.round((now - d.getTime()) / 1000);
+  const abs = Math.abs(diffSec);
+  if (abs < 10) return 'только что';
+  let label;
+  let amount;
+  let unit;
+  for (const u of RELATIVE_UNITS) {
+    if (abs < u.limit) {
+      amount = Math.round(abs / u.div);
+      unit = u.name;
+      break;
+    }
+  }
+  if (unit === undefined) {
+    amount = Math.round(abs / (86400 * 365));
+    unit = 'г';
+  }
+  label = `${amount} ${unit}`;
+  return diffSec >= 0 ? `${label} назад` : `через ${label}`;
+}
+
+/* --------------------- Status dot --------------------- */
+
+const STATUS_COLORS = {
+  active: 'var(--color-accent-green)',
+  success: 'var(--color-accent-green)',
+  paused: 'var(--color-text-muted)',
+  idle: 'var(--color-text-muted)',
+  error: 'var(--color-accent-red)',
+  pending: 'var(--color-accent-orange)',
+  warning: 'var(--color-accent-orange)',
+  info: 'var(--color-accent-cyan)',
+};
+
+/**
+ * Возвращает небольшой <span> — цветная точка статуса.
+ * @param {string} status — ключ из STATUS_COLORS или CSS-цвет.
+ */
+export function statusDot(status) {
+  const color = STATUS_COLORS[status] || status || STATUS_COLORS.idle;
+  const span = document.createElement('span');
+  span.className = 'inline-block rounded-full';
+  span.style.width = '0.5rem';
+  span.style.height = '0.5rem';
+  span.style.backgroundColor = color;
+  return span;
+}
+
+/* --------------------- Tabs (inline helper) --------------------- */
+
+/**
+ * Рендерит горизонтальный ряд табов в переданный контейнер, очищая его
+ * содержимое. Активный таб выделяется bg-card. При клике — вызывает
+ * onChange(id).
+ *
+ * @param {HTMLElement} container
+ * @param {Array<{id:string,label:string,count?:number}>} tabs
+ * @param {string} active
+ * @param {(id:string)=>void} onChange
+ */
+export function renderTabs(container, tabs, active, onChange) {
+  if (!container) return null;
+  container.innerHTML = '';
+  container.className = 'flex items-center gap-1 rounded-[var(--radius-md)] bg-[color:var(--color-bg-elevated)] p-1 w-fit';
+  for (const t of tabs) {
+    const isActive = t.id === active;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.setAttribute('role', 'tab');
+    btn.setAttribute('aria-selected', String(isActive));
+    btn.className = [
+      'flex items-center gap-2 rounded-[var(--radius-sm)] px-3 py-1.5 text-sm font-medium transition-colors',
+      isActive
+        ? 'bg-[color:var(--color-bg-card)] text-[color:var(--color-text-primary)] shadow-sm'
+        : 'text-[color:var(--color-text-secondary)] hover:text-[color:var(--color-text-primary)]',
+    ].join(' ');
+    btn.textContent = t.label;
+    if (typeof t.count === 'number') {
+      const badge = document.createElement('span');
+      badge.className = 'ml-2 rounded-full bg-[color:var(--color-bg-elevated)] px-1.5 text-xs text-[color:var(--color-text-secondary)]';
+      badge.textContent = String(t.count);
+      btn.appendChild(badge);
+    }
+    btn.addEventListener('click', () => {
+      if (typeof onChange === 'function') onChange(t.id);
+    });
+    container.appendChild(btn);
+  }
+  return container;
 }

@@ -1,1 +1,253 @@
+/* Mail Helper client — global styles
+ *
+ * Tailwind v4: используем CSS-first @theme для дизайн‑токенов (цвета, радиусы,
+ * шрифты, spacing) из Pencil. В @layer components кладём базовые UI‑классы,
+ * которыми пользуются примитивы из components/ui.js и view‑модули.
+ */
+
 @import "tailwindcss";
+
+@theme {
+  /* Accent palette — из Pencil */
+  --color-accent-purple: #7C3AED;
+  --color-accent-cyan: #0891B2;
+  --color-accent-green: #16A34A;
+  --color-accent-orange: #EA580C;
+  --color-accent-pink: #DB2777;
+  --color-accent-red: #DC2626;
+
+  /* Backgrounds / surfaces */
+  --color-bg-primary: #FFFFFF;
+  --color-bg-card: #FFFFFF;
+  --color-bg-surface: #F8F9FB;
+  --color-bg-elevated: #F0F1F5;
+  --color-sidebar-bg: #F3F4F6;
+  --color-input-bg: #F9FAFB;
+
+  /* Borders */
+  --color-border-subtle: #E5E7EB;
+  --color-border-default: #D1D5DB;
+
+  /* Text */
+  --color-text-primary: #111827;
+  --color-text-secondary: #6B7280;
+  --color-text-muted: #9CA3AF;
+
+  /* Radii (6/8/12 из плана) */
+  --radius-sm: 0.375rem; /* 6px */
+  --radius-md: 0.5rem;   /* 8px */
+  --radius-lg: 0.75rem;  /* 12px */
+
+  /* Spacing scale — именованная */
+  --spacing-xs: 0.25rem; /* 4 */
+  --spacing-sm: 0.5rem;  /* 8 */
+  --spacing-md: 1rem;    /* 16 */
+  --spacing-lg: 1.5rem;  /* 24 */
+  --spacing-xl: 2rem;    /* 32 */
+
+  /* Typography */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-display: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Base */
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+}
+
+/* Component layer — базовые классы для UI‑примитивов и view. */
+@layer components {
+  .card {
+    background-color: var(--color-bg-card);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
+  }
+
+  .stat-card {
+    background-color: var(--color-bg-card);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+  }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-sm);
+    font-weight: 500;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    padding: 0.5rem 0.875rem;
+    border-radius: var(--radius-md);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+    white-space: nowrap;
+  }
+  .btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .btn-primary {
+    background-color: var(--color-accent-purple);
+    color: #fff;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-color: #6D28D9;
+  }
+
+  .btn-ghost {
+    background-color: transparent;
+    color: var(--color-text-primary);
+    border-color: var(--color-border-default);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background-color: var(--color-bg-elevated);
+  }
+
+  .btn-danger {
+    background-color: var(--color-accent-red);
+    color: #fff;
+  }
+  .btn-danger:hover:not(:disabled) {
+    background-color: #B91C1C;
+  }
+
+  /* Sidebar nav */
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
+    color: var(--color-text-secondary);
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .nav-item:hover {
+    background-color: var(--color-bg-elevated);
+    color: var(--color-text-primary);
+  }
+  .nav-item-active,
+  .nav-item.active {
+    background-color: color-mix(in srgb, var(--color-accent-purple) 10%, transparent);
+    color: var(--color-accent-purple);
+    font-weight: 500;
+  }
+
+  /* Tag / Badge */
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1rem;
+    background-color: var(--color-bg-elevated);
+    color: var(--color-text-secondary);
+  }
+  .tag-purple {
+    background-color: color-mix(in srgb, var(--color-accent-purple) 12%, transparent);
+    color: var(--color-accent-purple);
+  }
+  .tag-green {
+    background-color: color-mix(in srgb, var(--color-accent-green) 14%, transparent);
+    color: var(--color-accent-green);
+  }
+  .tag-red {
+    background-color: color-mix(in srgb, var(--color-accent-red) 12%, transparent);
+    color: var(--color-accent-red);
+  }
+  .tag-orange {
+    background-color: color-mix(in srgb, var(--color-accent-orange) 14%, transparent);
+    color: var(--color-accent-orange);
+  }
+  .tag-cyan {
+    background-color: color-mix(in srgb, var(--color-accent-cyan) 14%, transparent);
+    color: var(--color-accent-cyan);
+  }
+
+  /* Toggle switch */
+  .toggle {
+    position: relative;
+    display: inline-flex;
+    width: 2.25rem;
+    height: 1.25rem;
+    background-color: var(--color-border-default);
+    border-radius: 9999px;
+    cursor: pointer;
+    transition: background-color 120ms ease;
+    flex-shrink: 0;
+  }
+  .toggle::after {
+    content: "";
+    position: absolute;
+    top: 0.125rem;
+    left: 0.125rem;
+    width: 1rem;
+    height: 1rem;
+    background: #fff;
+    border-radius: 9999px;
+    transition: transform 120ms ease;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  }
+  .toggle.is-on {
+    background-color: var(--color-accent-purple);
+  }
+  .toggle.is-on::after {
+    transform: translateX(1rem);
+  }
+
+  /* Form inputs — базовый стиль */
+  .input,
+  .textarea,
+  .select {
+    width: 100%;
+    background-color: var(--color-input-bg);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    color: var(--color-text-primary);
+    outline: none;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .input:focus,
+  .textarea:focus,
+  .select:focus {
+    border-color: var(--color-accent-purple);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent-purple) 15%, transparent);
+  }
+  .textarea {
+    font-family: var(--font-mono);
+    resize: vertical;
+    min-height: 6rem;
+  }
+}

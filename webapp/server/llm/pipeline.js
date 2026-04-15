@@ -28,7 +28,7 @@ const log = logger.child({ module: 'llmPipeline' });
 let registered = false;
 
 const selectPromptStmt = db.prepare(
-  'SELECT id, name, system_prompt, output_schema, is_default, enabled FROM prompts WHERE id = ?',
+  'SELECT id, name, system_prompt, output_schema, model, is_default, enabled FROM prompts WHERE id = ?',
 );
 
 function rowForApi(row) {
