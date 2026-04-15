@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mail Helper — Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>Mail Helper</h1>
+        <p class="subtitle">Extension settings</p>
+      </header>
+
+      <section class="card">
+        <h2>Backend connection</h2>
+
+        <label for="backend-url">Backend URL</label>
+        <input
+          type="url"
+          id="backend-url"
+          name="backend-url"
+          placeholder="http://localhost:3000"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p class="hint">
+          The HTTP origin of your Mail Helper server. WebSocket URL is derived
+          automatically by swapping http:// → ws:// (https → wss).
+        </p>
+
+        <label for="api-key">API Key</label>
+        <input
+          type="password"
+          id="api-key"
+          name="api-key"
+          placeholder="paste your api_key from backend settings"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p class="hint">
+          Generated on first backend start and stored in <code>settings.api_key</code>.
+          Used for both <code>X-API-Key</code> header and WS <code>?token=</code> query.
+        </p>
+
+        <div class="actions">
+          <button type="button" id="save-btn" class="primary">Save</button>
+          <button type="button" id="test-btn">Test connection</button>
+          <button type="button" id="reconnect-btn">Reconnect WS</button>
+        </div>
+
+        <div id="status" class="status" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="card">
+        <h2>Notifications</h2>
+        <label class="checkbox">
+          <input type="checkbox" id="notify-important" />
+          <span>Show desktop notification for every important message</span>
+        </label>
+        <p class="hint">
+          Uses <code>chrome.notifications</code>. You may also need to enable
+          browser-level notifications in OS settings.
+        </p>
+
+        <div class="actions">
+          <button type="button" id="save-notify-btn">Save notification settings</button>
+        </div>
+      </section>
+
+      <footer>
+        <p class="version">Mail Helper · MV3 extension</p>
+      </footer>
+    </main>
+
+    <script src="options.js"></script>
+  </body>
+</html>

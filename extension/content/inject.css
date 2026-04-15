@@ -1,0 +1,68 @@
+/* content/inject.css — стили, инжектируемые вместе с content scripts.
+ * Задача: зарезервировать правую полосу под iframe с sidebar.
+ * CSS переменная --mh-sidebar-width используется обоими content-скриптами
+ * чтобы можно было менять ширину в одном месте. Основной сдвиг контента
+ * делается JS-хелпером (устанавливает padding-right на <html> или на
+ * корневой контейнер Gmail/Yandex), но если контейнер не найден — эти
+ * правила хотя бы дадут iframe корректную ширину и z-index.
+ */
+
+:root {
+  --mh-sidebar-width: 380px;
+}
+
+/* iframe-панель: всегда поверх содержимого, с жёстким z-index.
+ * position:fixed и border:0 стоят inline в content script для надёжности,
+ * дублируем здесь чтобы расширение работало даже если страница переопределит
+ * inline-стиль через CSP/SPA перерисовку. */
+iframe.mh-sidebar-frame {
+  position: fixed !important;
+  top: 0 !important;
+  right: 0 !important;
+  width: var(--mh-sidebar-width) !important;
+  height: 100vh !important;
+  border: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: #ffffff !important;
+  z-index: 2147483600 !important;
+  box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1) !important;
+  color-scheme: light !important;
+}
+
+iframe.mh-sidebar-frame.mh-collapsed {
+  width: 36px !important;
+}
+
+/* Кнопка toggle (когда панель свёрнута, показываем узкую полоску). */
+.mh-sidebar-toggle {
+  position: fixed !important;
+  top: 12px !important;
+  right: calc(var(--mh-sidebar-width) - 12px) !important;
+  width: 24px !important;
+  height: 24px !important;
+  border-radius: 12px !important;
+  background: #2563eb !important;
+  color: #ffffff !important;
+  border: 0 !important;
+  font: bold 14px/24px sans-serif !important;
+  text-align: center !important;
+  cursor: pointer !important;
+  z-index: 2147483601 !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2) !important;
+  user-select: none !important;
+}
+
+.mh-sidebar-toggle.mh-collapsed {
+  right: 6px !important;
+}
+
+/* Глобальный сдвиг контента. Ставится через JS добавлением класса на <html>. */
+html.mh-sidebar-open {
+  padding-right: var(--mh-sidebar-width) !important;
+  box-sizing: border-box !important;
+}
+
+html.mh-sidebar-open.mh-sidebar-collapsed {
+  padding-right: 36px !important;
+}

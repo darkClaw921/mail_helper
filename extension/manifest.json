@@ -1,0 +1,66 @@
+{
+  "manifest_version": 3,
+  "name": "Mail Helper",
+  "version": "0.1.0",
+  "description": "Sidebar for Gmail and Yandex.Mail that shows LLM-classified important messages from the Mail Helper backend.",
+  "permissions": [
+    "storage",
+    "notifications",
+    "alarms",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://mail.google.com/*",
+    "*://mail.yandex.ru/*",
+    "http://localhost:3000/*",
+    "http://127.0.0.1:3000/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://mail.google.com/*"],
+      "js": ["content/gmail.js"],
+      "css": ["content/inject.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://mail.yandex.ru/*"],
+      "js": ["content/yandex.js"],
+      "css": ["content/inject.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options/options.html",
+  "action": {
+    "default_title": "Mail Helper",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "sidebar/sidebar.html",
+        "sidebar/sidebar.js",
+        "sidebar/sidebar.css",
+        "icons/*"
+      ],
+      "matches": [
+        "*://mail.google.com/*",
+        "*://mail.yandex.ru/*"
+      ]
+    }
+  ]
+}

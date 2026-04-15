@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mail Helper</title>
+    <link rel="stylesheet" href="sidebar.css" />
+  </head>
+  <body>
+    <div class="sidebar">
+      <header class="header">
+        <div class="brand">
+          <span class="brand-dot"></span>
+          <span class="brand-title">Mail Helper</span>
+        </div>
+        <div class="ws-status" id="ws-status" title="WebSocket connection status">
+          <span class="ws-dot" id="ws-dot"></span>
+          <span id="ws-label">…</span>
+        </div>
+      </header>
+
+      <nav class="filters" role="tablist">
+        <button class="filter active" data-filter="important" role="tab">
+          Important
+        </button>
+        <button class="filter" data-filter="unread" role="tab">Unread</button>
+        <button class="filter" data-filter="all" role="tab">All</button>
+        <button class="filter refresh" id="refresh-btn" title="Refresh">↻</button>
+      </nav>
+
+      <div class="messages" id="messages">
+        <div class="empty" id="empty-state">Loading…</div>
+      </div>
+
+      <footer class="footer">
+        <span id="count">0 messages</span>
+        <button class="link" id="open-options">Settings</button>
+      </footer>
+    </div>
+
+    <script src="sidebar.js"></script>
+  </body>
+</html>
