@@ -15,7 +15,7 @@ const router = Router();
 
 const LIST_COLUMNS =
   'id, account_id, uid, message_id, subject, from_addr, to_addr, date, snippet, ' +
-  'is_read, is_important, classification_json, prompt_id, tokens_used, created_at';
+  'is_read, is_important, classification_json, prompt_id, tokens_used, cost, created_at';
 
 const ONE_COLUMNS = LIST_COLUMNS + ', body_text, body_html';
 

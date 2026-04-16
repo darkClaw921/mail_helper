@@ -22,7 +22,7 @@
 // CRUD через api.js promptsApi (list/get/create/update/remove). «Тестировать»
 // дёргает POST /api/prompts/:id/test через apiFetch.
 
-import { promptsApi, actionsApi, apiFetch } from '../api.js';
+import { promptsApi, actionsApi, apiFetch, settingsApi } from '../api.js';
 import {
   SectionHeader,
   Card,
@@ -66,6 +66,20 @@ const PARAM_TYPE_OPTIONS = [
 ];
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+let currencyCache = { currency: 'USD', rate: null };
+
+function formatCost(usd) {
+  if (usd == null || usd === 0) return null;
+  const { currency, rate } = currencyCache;
+  if (currency === 'RUB' && rate) {
+    const rub = usd * rate;
+    if (rub < 0.01) return '<0.01 ₽';
+    return rub.toFixed(2) + ' ₽';
+  }
+  if (usd < 0.01) return '<$0.01';
+  return '$' + usd.toFixed(2);
+}
 
 // Типы правил маршрутизации — должны совпадать с ACTION_TYPES в api/actions.js
 // (сейчас backend принимает telegram | webhook | forward | browser).
@@ -283,6 +297,24 @@ function renderList() {
     );
     if (badges.length) {
       card.appendChild(h('div', { class: 'mt-2 flex flex-wrap gap-1' }, badges));
+    }
+    // Per-prompt stats: tokens + cost.
+    const ps = p.stats || {};
+    const tokTotal = Number(ps.tokens_total || 0);
+    const costTotal = Number(ps.cost_total || 0);
+    const msgCount = Number(ps.messages_classified || 0);
+    if (tokTotal > 0 || msgCount > 0) {
+      const parts = [];
+      if (msgCount) parts.push(`${msgCount.toLocaleString('ru-RU')} писем`);
+      if (tokTotal) parts.push(`${tokTotal.toLocaleString('ru-RU')} tok`);
+      const costStr = formatCost(costTotal);
+      if (costStr) parts.push(costStr);
+      card.appendChild(
+        h('div', {
+          class: 'mt-2 text-[10px] font-mono text-[color:var(--color-text-muted)] text-right',
+          text: parts.join(' · '),
+        }),
+      );
     }
     card.addEventListener('click', () => {
       state.selectedId = p.id;
@@ -1343,6 +1375,10 @@ async function refresh() {
 
 export async function renderPrompts(root) {
   root.innerHTML = '';
+  // Load currency settings (fire-and-forget).
+  settingsApi.get().then((s) => {
+    if (s) currencyCache = { currency: s.currency || 'USD', rate: s.currency_rate || null };
+  }).catch(() => {});
   const wrap = h('div', { class: 'flex flex-col gap-4' });
   root.appendChild(wrap);
 

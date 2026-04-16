@@ -69,13 +69,42 @@ const clearDefaultsStmt = db.prepare(
 const clearAllDefaultsStmt = db.prepare('UPDATE prompts SET is_default = 0 WHERE is_default = 1');
 const deleteStmt = db.prepare('DELETE FROM prompts WHERE id = ?');
 
+// Per-prompt stats из action_runs (через actions.prompt_id).
+// Дедупликация по message_id: GROUP BY message_id берёт MAX tokens/cost
+// (все action_runs одного prompt+message имеют одинаковые per-prompt значения).
+const selectPromptStatsStmt = db.prepare(
+  `SELECT COUNT(*)                       AS messages_classified,
+          COALESCE(SUM(tokens_used), 0)  AS tokens_total,
+          COALESCE(SUM(cost), 0)         AS cost_total
+     FROM (
+       SELECT ar.message_id,
+              MAX(ar.tokens_used) AS tokens_used,
+              MAX(ar.cost)        AS cost
+         FROM action_runs ar
+         JOIN actions a ON ar.action_id = a.id
+        WHERE a.prompt_id = ?
+        GROUP BY ar.message_id
+     )`,
+);
+
 /**
  * Нормализует запись из БД для ответа API: output_params возвращается в виде массива,
  * а не JSON-строки (пользователю/UI удобнее работать с объектами).
  */
 function shapeRow(row) {
   if (!row) return row;
-  return { ...row, output_params: parseOutputParams(row.output_params) };
+  let stats = { messages_classified: 0, tokens_total: 0, cost_total: 0 };
+  try {
+    const s = selectPromptStatsStmt.get(row.id);
+    if (s) {
+      stats = {
+        messages_classified: s.messages_classified ?? 0,
+        tokens_total: s.tokens_total ?? 0,
+        cost_total: s.cost_total ?? 0,
+      };
+    }
+  } catch { /* fallback */ }
+  return { ...row, output_params: parseOutputParams(row.output_params), stats };
 }
 
 router.get('/', (_req, res) => {

@@ -6,7 +6,7 @@
 // WebSocket auto-update (/ws?token=<api_key>) с обработкой `new_message` и
 // `updated`.
 
-import { accountsApi, messagesApi } from '../api.js';
+import { accountsApi, messagesApi, settingsApi } from '../api.js';
 import {
   Card,
   SectionHeader,
@@ -17,6 +17,20 @@ import {
   Select,
 } from '../components/ui.js';
 import { h, formatRelative, statusDot, showError } from './util.js';
+
+let currencyCache = { currency: 'USD', rate: null };
+
+function formatCost(usd) {
+  if (usd == null || usd === 0) return null;
+  const { currency, rate } = currencyCache;
+  if (currency === 'RUB' && rate) {
+    const rub = usd * rate;
+    if (rub < 0.01) return '<0.01 ₽';
+    return rub.toFixed(4) + ' ₽';
+  }
+  if (usd < 0.0001) return '<$0.0001';
+  return '$' + usd.toFixed(4);
+}
 
 const state = {
   messages: [],
@@ -75,12 +89,16 @@ function renderDetailsRow(m) {
   const tokensLabel = m.tokens_used != null
     ? `Токены LLM: ${Number(m.tokens_used).toLocaleString('ru-RU')}`
     : 'Токены LLM: —';
+  const costLabel = formatCost(m.cost);
   const meta = h('div', { class: 'mb-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-xs text-[color:var(--color-text-secondary)] break-all' }, [
     h('div', {}, `From: ${m.from_addr || '—'}`),
     h('div', {}, `To: ${m.to_addr || '—'}`),
     h('div', {}, `UID: ${m.uid}`),
     h('div', {}, `Account: #${m.account_id}`),
-    h('div', { class: 'sm:col-span-2 font-medium text-[color:var(--color-text-primary)]' }, tokensLabel),
+    h('div', { class: 'font-medium text-[color:var(--color-text-primary)]' }, tokensLabel),
+    costLabel
+      ? h('div', { class: 'font-medium text-[color:var(--color-accent-green)]' }, `Стоимость: ${costLabel}`)
+      : h('div', {}, 'Стоимость: —'),
   ]);
   box.appendChild(meta);
 
@@ -219,6 +237,7 @@ function renderTable(host) {
     ]);
     tr.appendChild(tagsCell);
     const stat = statusFor(m);
+    const costStr = formatCost(m.cost);
     const statusCell = h('div', { class: 'flex flex-col gap-0.5' }, [
       h('div', { class: 'inline-flex items-center gap-2' }, [
         statusDot(stat.key),
@@ -227,7 +246,7 @@ function renderTable(host) {
       m.tokens_used != null
         ? h('span', {
             class: 'text-[10px] text-[color:var(--color-text-muted)] font-mono',
-            text: `${Number(m.tokens_used).toLocaleString('ru-RU')} tok`,
+            text: `${Number(m.tokens_used).toLocaleString('ru-RU')} tok` + (costStr ? ` · ${costStr}` : ''),
           })
         : null,
     ]);
@@ -324,10 +343,19 @@ function connectWs(root) {
 
 export async function renderMessages(root) {
   root.innerHTML = '';
-  // Загрузить аккаунты для фильтра.
+  // Загрузить аккаунты + валюту параллельно.
   try {
-    const acc = await accountsApi.list();
+    const [acc, settings] = await Promise.all([
+      accountsApi.list(),
+      settingsApi.get().catch(() => null),
+    ]);
     state.accounts = Array.isArray(acc) ? acc : acc.accounts || [];
+    if (settings) {
+      currencyCache = {
+        currency: settings.currency || 'USD',
+        rate: settings.currency_rate || null,
+      };
+    }
   } catch (err) {
     showError(root, err);
   }
