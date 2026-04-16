@@ -58,22 +58,47 @@ function describeConfig(action) {
 
 /* ------------------------------- Stats row ----------------------------- */
 
+// Кэш валюты из последнего loadStats — используется в карточках actions.
+let cachedCurrency = 'USD';
+let cachedCurrencyRate = null;
+
+function formatCost(usd, currency, rate) {
+  const cur = currency || cachedCurrency;
+  const r = rate || cachedCurrencyRate;
+  if (usd == null || usd === 0) {
+    return cur === 'RUB' ? '0 ₽' : '$0.00';
+  }
+  if (cur === 'RUB' && r) {
+    const rub = usd * r;
+    if (rub < 0.01) return '<0.01 ₽';
+    return rub.toFixed(2) + ' ₽';
+  }
+  if (usd < 0.01) return '<$0.01';
+  return '$' + usd.toFixed(2);
+}
+
 const STAT_DEFS = [
   { key: 'rules_active', label: 'Активных правил', icon: 'zap', accent: 'purple' },
   { key: 'rules_triggered_today', label: 'Срабатываний сегодня', icon: 'bell', accent: 'cyan' },
-  { key: 'action_tokens_total', label: 'Токенов на действия', icon: 'brain', accent: 'orange' },
-  { key: 'tokens_total', label: 'Токенов всего', icon: 'brain-circuit', accent: 'green' },
+  { key: 'tokens_total', label: 'Токенов всего', icon: 'brain-circuit', accent: 'orange' },
+  { key: 'cost_usd', label: 'Потрачено', icon: 'brain', accent: 'green', format: formatCost },
 ];
 
 function renderStatsRow(host, stats, opts = {}) {
   host.innerHTML = '';
   host.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4';
+  // Cache currency settings for per-action cost display.
+  if (stats?.currency) cachedCurrency = stats.currency;
+  if (stats?.currency_rate) cachedCurrencyRate = stats.currency_rate;
   for (const def of STAT_DEFS) {
-    const value = opts.error ? '—' : (stats?.[def.key] ?? 0);
+    const raw = opts.error ? '—' : (stats?.[def.key] ?? 0);
+    const value = def.format
+      ? def.format(raw, stats?.currency, stats?.currency_rate)
+      : typeof raw === 'number' ? raw.toLocaleString('ru-RU') : raw;
     host.appendChild(
       StatsCard({
         label: def.label,
-        value: typeof value === 'number' ? value.toLocaleString('ru-RU') : value,
+        value,
         icon: def.icon,
         accent: def.accent,
       }),
@@ -166,6 +191,7 @@ function renderRuleCard(action, ctx) {
   const runsTotal = Number(stats.runs_total || 0);
   const runsOk = Number(stats.runs_ok || 0);
   const tokensTotal = Number(stats.tokens_total || 0);
+  const costTotal = Number(stats.cost_total || 0);
   const lastRunAt = stats.last_run_at || action.last_triggered_at || null;
   const statsRow = h('div', { class: 'w-full flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[color:var(--color-text-muted)] border-t border-[color:var(--color-border-subtle)] pt-2 mt-1' }, [
     h('span', { class: 'font-mono text-[color:var(--color-text-primary)]', text: `${tokensTotal.toLocaleString('ru-RU')} tok` }),
@@ -173,6 +199,9 @@ function renderRuleCard(action, ctx) {
     lastRunAt
       ? h('span', {}, `Последнее: ${formatRelative(lastRunAt)}`)
       : h('span', { class: 'italic' }, 'ни разу не запускалось'),
+    costTotal > 0
+      ? h('span', { class: 'font-mono text-[color:var(--color-accent-green)]', text: formatCost(costTotal) })
+      : null,
   ]);
   card.appendChild(statsRow);
   return card;

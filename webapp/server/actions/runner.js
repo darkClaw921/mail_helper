@@ -40,6 +40,32 @@ const log = logger.child({ module: 'actionsRunner' });
 
 let registered = false;
 
+// Дедупликация глобальных actions (prompt_id IS NULL) при мультипромтовой классификации.
+// Ключ: message_id → Set<action_id>. Очищается после обработки всех промтов.
+// TTL: 60с — на случай если pipeline не почистит.
+const globalActionRuns = new Map();
+const GLOBAL_RUNS_TTL_MS = 60_000;
+
+function markGlobalRun(messageId, actionId) {
+  if (!globalActionRuns.has(messageId)) {
+    globalActionRuns.set(messageId, { ids: new Set(), ts: Date.now() });
+  }
+  globalActionRuns.get(messageId).ids.add(actionId);
+}
+
+function wasGlobalRun(messageId, actionId) {
+  const entry = globalActionRuns.get(messageId);
+  return entry ? entry.ids.has(actionId) : false;
+}
+
+// Периодическая очистка stale entries.
+setInterval(() => {
+  const now = Date.now();
+  for (const [mid, entry] of globalActionRuns) {
+    if (now - entry.ts > GLOBAL_RUNS_TTL_MS) globalActionRuns.delete(mid);
+  }
+}, GLOBAL_RUNS_TTL_MS);
+
 // Выбираем: enabled=1 и (prompt_id IS NULL => глобальный action, применим к любому промту)
 // или prompt_id совпадает с тем, по которому письмо было классифицировано.
 //
@@ -59,18 +85,15 @@ const selectPromptParamsStmt = db.prepare(
 const selectPromptMatchModeStmt = db.prepare(
   'SELECT match_mode FROM prompts WHERE id = ?',
 );
-const selectMessageTokensStmt = db.prepare(
-  'SELECT tokens_used FROM messages WHERE id = ?',
-);
 const insertActionRunStmt = db.prepare(
-  `INSERT INTO action_runs (action_id, message_id, ok, error, tokens_used, created_at)
-   VALUES (@action_id, @message_id, @ok, @error, @tokens_used, @created_at)`,
+  `INSERT INTO action_runs (action_id, message_id, ok, error, tokens_used, cost, created_at)
+   VALUES (@action_id, @message_id, @ok, @error, @tokens_used, @cost, @created_at)`,
 );
 
 /**
  * Пишет журнал запуска action. Никогда не кидает — любой fail логируется.
  */
-function logActionRun({ actionId, messageId, ok, error, tokensUsed }) {
+function logActionRun({ actionId, messageId, ok, error, tokensUsed, cost }) {
   try {
     insertActionRunStmt.run({
       action_id: actionId,
@@ -78,6 +101,7 @@ function logActionRun({ actionId, messageId, ok, error, tokensUsed }) {
       ok: ok ? 1 : 0,
       error: error == null ? null : String(error).slice(0, 500),
       tokens_used: Number.isFinite(tokensUsed) ? tokensUsed : null,
+      cost: typeof cost === 'number' && Number.isFinite(cost) ? cost : null,
       created_at: Math.floor(Date.now() / 1000),
     });
   } catch (err) {
@@ -154,9 +178,10 @@ export async function dispatchAction(action, message, classification) {
  * @param {object} message — API-shape записи из messages
  * @param {object} classification — JSON-объект (important/reason/tags/summary)
  * @param {{ id?: number } | null} [prompt] — промт, по которому письмо классифицировали
+ * @param {{ tokens?: number, cost?: number }} [llmUsage] — per-prompt tokens/cost из pipeline event
  * @returns {Promise<Array<{ action_id:number, type:string, matched:boolean, ok?:boolean, error?:string }>>}
  */
-export async function runActionsForMessage(message, classification, prompt = null) {
+export async function runActionsForMessage(message, classification, prompt = null, llmUsage = {}) {
   const promptId = prompt?.id ?? message?.prompt_id ?? null;
   const rows = selectActionsStmt.all({ prompt_id: promptId });
   if (rows.length === 0) {
@@ -187,11 +212,26 @@ export async function runActionsForMessage(message, classification, prompt = nul
   }
 
   if (matchMode === 'first') {
-    return runFirstMode(rows, message, classification, prompt, promptId);
+    return runFirstMode(rows, message, classification, prompt, promptId, llmUsage);
   }
 
   const pending = [];
+  const messageId = message?.id ?? null;
   for (const row of rows) {
+    // Дедупликация глобальных actions (prompt_id IS NULL) при мультипромтовой
+    // классификации: если этот глобальный action уже выполнен для данного
+    // письма другим промтом — пропускаем.
+    if (row.prompt_id == null && messageId != null && wasGlobalRun(messageId, row.id)) {
+      log.debug(
+        { action_id: row.id, message_id: messageId },
+        'global action already dispatched for this message — skipping duplicate',
+      );
+      pending.push(
+        Promise.resolve({ action_id: row.id, type: row.type, matched: false, skipped: 'dedup' }),
+      );
+      continue;
+    }
+
     const config = decryptConfig(row);
     if (config === null) {
       pending.push(
@@ -246,17 +286,15 @@ export async function runActionsForMessage(message, classification, prompt = nul
       continue;
     }
 
-    const enriched = { ...row, config };
-    // Tokens attribution: стоимость LLM-классификации письма, которое
-    // триггернуло этот action. Берём из messages.tokens_used (свежее чтение
-    // на случай если classifier только что обновил запись).
-    let tokensUsed = null;
-    try {
-      const mrow = message?.id ? selectMessageTokensStmt.get(message.id) : null;
-      tokensUsed = mrow && Number.isFinite(mrow.tokens_used) ? mrow.tokens_used : null;
-    } catch {
-      tokensUsed = null;
+    // Помечаем глобальный action как выполненный для этого письма.
+    if (row.prompt_id == null && messageId != null) {
+      markGlobalRun(messageId, row.id);
     }
+
+    const enriched = { ...row, config };
+    // Per-prompt tokens/cost из pipeline event.
+    const tokensUsed = Number.isFinite(llmUsage.tokens) ? llmUsage.tokens : null;
+    const costUsed = typeof llmUsage.cost === 'number' && Number.isFinite(llmUsage.cost) ? llmUsage.cost : null;
     pending.push(
       dispatchAction(enriched, message, classification).then(
         (res) => {
@@ -268,6 +306,7 @@ export async function runActionsForMessage(message, classification, prompt = nul
             ok,
             error,
             tokensUsed,
+            cost: costUsed,
           });
           return {
             action_id: row.id,
@@ -278,7 +317,6 @@ export async function runActionsForMessage(message, classification, prompt = nul
             tokens_used: tokensUsed,
           };
         },
-        // dispatchAction сам не должен кидать, но на всякий случай
         (err) => {
           const error = err?.message || String(err);
           logActionRun({
@@ -287,6 +325,7 @@ export async function runActionsForMessage(message, classification, prompt = nul
             ok: false,
             error,
             tokensUsed,
+            cost: costUsed,
           });
           return {
             action_id: row.id,
@@ -334,11 +373,22 @@ export async function runActionsForMessage(message, classification, prompt = nul
  * Остальные правила не появляются в результатах (ни matched, ни skipped) — по смыслу
  * они даже не были проверены. Если matched, но dispatch упал — продолжаем к следующему.
  */
-async function runFirstMode(rows, message, classification, prompt, promptId) {
+async function runFirstMode(rows, message, classification, prompt, promptId, llmUsage = {}) {
   const results = [];
+  const messageId = message?.id ?? null;
   let matchedCount = 0;
   let okCount = 0;
   for (const row of rows) {
+    // Дедупликация глобальных actions при мультипромтовой классификации.
+    if (row.prompt_id == null && messageId != null && wasGlobalRun(messageId, row.id)) {
+      log.debug(
+        { action_id: row.id, message_id: messageId },
+        'global action already dispatched for this message — skipping duplicate (first-mode)',
+      );
+      results.push({ action_id: row.id, type: row.type, matched: false, skipped: 'dedup' });
+      continue;
+    }
+
     const config = decryptConfig(row);
     if (config === null) {
       results.push({
@@ -386,14 +436,16 @@ async function runFirstMode(rows, message, classification, prompt, promptId) {
     }
 
     matchedCount += 1;
-    const enriched = { ...row, config };
-    let tokensUsed = null;
-    try {
-      const mrow = message?.id ? selectMessageTokensStmt.get(message.id) : null;
-      tokensUsed = mrow && Number.isFinite(mrow.tokens_used) ? mrow.tokens_used : null;
-    } catch {
-      tokensUsed = null;
+
+    // Помечаем глобальный action как выполненный для этого письма.
+    if (row.prompt_id == null && messageId != null) {
+      markGlobalRun(messageId, row.id);
     }
+
+    const enriched = { ...row, config };
+    // Per-prompt tokens/cost из pipeline event.
+    const tokensUsed = Number.isFinite(llmUsage.tokens) ? llmUsage.tokens : null;
+    const costUsed = typeof llmUsage.cost === 'number' && Number.isFinite(llmUsage.cost) ? llmUsage.cost : null;
 
     let dispatchRes;
     try {
@@ -409,6 +461,7 @@ async function runFirstMode(rows, message, classification, prompt, promptId) {
       ok,
       error,
       tokensUsed,
+      cost: costUsed,
     });
     results.push({
       action_id: row.id,
@@ -450,8 +503,8 @@ export function registerActionsRunner() {
   registered = true;
   mailEvents.on('message:classified', (payload) => {
     if (!payload) return;
-    const { message, classification, prompt } = payload;
-    runActionsForMessage(message, classification, prompt).catch((err) =>
+    const { message, classification, prompt, tokens, cost } = payload;
+    runActionsForMessage(message, classification, prompt, { tokens, cost }).catch((err) =>
       log.error(
         { err: err?.message || String(err), message_id: message?.id },
         'runActionsForMessage unhandled error',

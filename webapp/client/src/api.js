@@ -123,7 +123,11 @@ function resource(basePath) {
 }
 
 export const accountsApi = resource('/api/accounts');
-export const promptsApi = resource('/api/prompts');
+export const promptsApi = {
+  ...resource('/api/prompts'),
+  generate: (description) =>
+    apiFetch('/api/prompts/generate', { method: 'POST', body: { description } }),
+};
 export const actionsApi = {
   ...resource('/api/actions'),
   /**
@@ -153,6 +157,10 @@ export const actionsApi = {
     }),
 };
 export const messagesApi = resource('/api/messages');
+export const statsApi = {
+  get: () => apiFetch('/api/stats'),
+  resetTokens: () => apiFetch('/api/stats/reset-tokens', { method: 'POST' }),
+};
 
 // settings — не-/:id ресурс, GET/PUT на корне.
 export const settingsApi = {

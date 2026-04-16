@@ -423,6 +423,27 @@ export async function renderMessages(root) {
   wrap.appendChild(tableCard);
 
   await reload(root);
+
+  // Auto-expand message if navigated from dashboard click.
+  if (window.__expandMessageId != null) {
+    const id = window.__expandMessageId;
+    delete window.__expandMessageId;
+    state.expanded.add(id);
+    renderTable(listHostRef);
+    // Scroll to expanded row.
+    requestAnimationFrame(() => {
+      const detail = listHostRef.querySelector(`tr[data-detail="${id}"]`);
+      if (detail) detail.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }
+
   renderTabsRow();
   connectWs(root);
+
+  // Cleanup WS при уходе со страницы.
+  function onHashChange() {
+    if (state.ws) { state.ws.close(); state.ws = null; }
+    window.removeEventListener('hashchange', onHashChange);
+  }
+  window.addEventListener('hashchange', onHashChange);
 }

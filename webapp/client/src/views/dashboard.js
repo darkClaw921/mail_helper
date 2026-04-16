@@ -13,7 +13,7 @@
 // main.js это уже учитывает: если модуль присутствует — будет вызвана она,
 // иначе fallback‑placeholder).
 
-import { apiFetch, accountsApi, messagesApi } from '../api.js';
+import { apiFetch, accountsApi, messagesApi, statsApi } from '../api.js';
 import {
   Card,
   StatsCard,
@@ -34,9 +34,22 @@ const STATS_DEFINITION = [
   { key: 'pending', label: 'Ждут решения', icon: 'bookmark', accent: 'red' },
 ];
 
+function formatCost(usd, currency, rate) {
+  if (usd == null || usd === 0) {
+    return currency === 'RUB' ? '0 ₽' : '$0.00';
+  }
+  if (currency === 'RUB' && rate) {
+    const rub = usd * rate;
+    if (rub < 0.01) return '<0.01 ₽';
+    return rub.toFixed(2) + ' ₽';
+  }
+  if (usd < 0.01) return '<$0.01';
+  return '$' + usd.toFixed(2);
+}
+
 function renderStatsRow(target, stats, opts = {}) {
   target.innerHTML = '';
-  target.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4';
+  target.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4';
   for (const def of STATS_DEFINITION) {
     const value = opts.error ? '—' : stats?.[def.key] ?? 0;
     target.appendChild(StatsCard({
@@ -46,6 +59,19 @@ function renderStatsRow(target, stats, opts = {}) {
       accent: def.accent,
     }));
   }
+  // Cost card — реальная стоимость из OpenRouter usage.cost
+  const cur = stats?.currency || 'USD';
+  const curRate = stats?.currency_rate || null;
+  const costValue = opts.error ? '—' : formatCost(stats?.cost_usd, cur, curRate);
+  const todayCost = stats?.cost_today_usd;
+  const deltaText = opts.error ? '' : (todayCost ? `сегодня ${formatCost(todayCost, cur, curRate)}` : `${(stats?.tokens_total ?? 0).toLocaleString('ru-RU')} tok`);
+  target.appendChild(StatsCard({
+    label: 'Потрачено',
+    value: costValue,
+    icon: 'brain-circuit',
+    accent: 'green',
+    delta: deltaText,
+  }));
 }
 
 /* ----------------------------- Messages table -------------------------- */
@@ -121,7 +147,11 @@ function renderMessagesTable(host, messages) {
   for (const m of messages) {
     const cls = m.classification;
     const tr = document.createElement('tr');
-    tr.className = 'border-b border-[color:var(--color-border-subtle)] last:border-0 hover:bg-[color:var(--color-bg-elevated)] transition-colors';
+    tr.className = 'border-b border-[color:var(--color-border-subtle)] last:border-0 hover:bg-[color:var(--color-bg-elevated)] cursor-pointer transition-colors';
+    tr.addEventListener('click', () => {
+      window.__expandMessageId = m.id;
+      window.location.hash = '#/inbox';
+    });
     tr.appendChild(h('td', { class: 'py-2 pr-3 max-w-[18rem]' }, [
       h('div', { class: 'font-medium text-[color:var(--color-text-primary)] truncate', text: m.subject || '(без темы)' }),
     ]));
@@ -199,13 +229,37 @@ export async function renderDashboard(root) {
     }),
   );
 
-  // 2. Stats row (skeleton then data).
-  const statsRow = h('div', { class: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4' });
+  // 2. Stats row (skeleton then data) + reset button.
+  const statsRow = h('div', { class: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4' });
   // skeleton
   for (const def of STATS_DEFINITION) {
     statsRow.appendChild(StatsCard({ label: def.label, value: '…', icon: def.icon, accent: def.accent }));
   }
-  wrap.appendChild(statsRow);
+  statsRow.appendChild(StatsCard({ label: 'Потрачено', value: '…', icon: 'brain-circuit', accent: 'green' }));
+
+  const resetBtn = Button({
+    label: 'Сбросить статистику токенов',
+    variant: 'danger',
+    icon: 'trash',
+    size: 'sm',
+    onClick: async () => {
+      if (!window.confirm('Сбросить всю статистику токенов и журнал запусков действий? Это необратимо.')) return;
+      resetBtn.disabled = true;
+      try {
+        await statsApi.resetTokens();
+        await loadStats();
+      } catch (err) {
+        window.alert('Ошибка: ' + (err?.message || err));
+      } finally {
+        resetBtn.disabled = false;
+      }
+    },
+  });
+  const statsWrap = h('div', { class: 'flex flex-col gap-2' }, [
+    statsRow,
+    h('div', { class: 'flex justify-end' }, [resetBtn]),
+  ]);
+  wrap.appendChild(statsWrap);
 
   // 3. Recent AI analysis section.
   const messagesHost = document.createElement('div');
@@ -292,6 +346,38 @@ export async function renderDashboard(root) {
 
   // Параллельная инициализация.
   await Promise.all([loadStats(), loadMessages(), loadAccounts()]);
+
+  // WebSocket — live-обновление при новых/обновлённых письмах.
+  let ws = null;
+  function connectWs() {
+    try {
+      if (ws) { ws.close(); ws = null; }
+      const apiKey = sessionStorage.getItem('api_key') || '';
+      if (!apiKey) return;
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = `${proto}//${window.location.host}/ws?token=${encodeURIComponent(apiKey)}`;
+      ws = new WebSocket(url);
+      ws.addEventListener('message', (ev) => {
+        let payload;
+        try { payload = JSON.parse(ev.data); } catch { return; }
+        if (payload.type === 'new_message' || payload.type === 'updated') {
+          loadStats();
+          loadMessages();
+        }
+      });
+      ws.addEventListener('close', () => { ws = null; });
+    } catch (err) {
+      console.warn('dashboard ws failed', err);
+    }
+  }
+  connectWs();
+
+  // Cleanup при уходе со страницы (hash change).
+  function onHashChange() {
+    if (ws) { ws.close(); ws = null; }
+    window.removeEventListener('hashchange', onHashChange);
+  }
+  window.addEventListener('hashchange', onHashChange);
 }
 
 export default renderDashboard;

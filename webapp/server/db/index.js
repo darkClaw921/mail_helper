@@ -88,6 +88,16 @@ export function applySchema(db) {
   if (!messagesCols.includes('tokens_used')) {
     db.exec('ALTER TABLE messages ADD COLUMN tokens_used INTEGER');
   }
+  if (!messagesCols.includes('cost')) {
+    db.exec('ALTER TABLE messages ADD COLUMN cost REAL');
+    logger.info({ migration: 'messages.cost' }, 'applied schema migration');
+  }
+  // action_runs.cost — реальная стоимость per-prompt LLM из OpenRouter.
+  const actionRunsCols = db.prepare("PRAGMA table_info('action_runs')").all().map((r) => r.name);
+  if (!actionRunsCols.includes('cost')) {
+    db.exec('ALTER TABLE action_runs ADD COLUMN cost REAL');
+    logger.info({ migration: 'action_runs.cost' }, 'applied schema migration');
+  }
   // Ф3.1 — actions.priority: приоритет выполнения правила (выше = раньше).
   const actionsCols = db.prepare("PRAGMA table_info('actions')").all().map((r) => r.name);
   if (!actionsCols.includes('priority')) {

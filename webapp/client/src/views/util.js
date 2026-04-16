@@ -197,7 +197,10 @@ const RELATIVE_UNITS = [
  */
 export function formatRelative(value) {
   if (value == null || value === '') return '';
-  const d = value instanceof Date ? value : new Date(value);
+  // Автодетект unix-секунд: числа < 1e12 — секунды (до ~2001 в ms), конвертируем в ms.
+  let raw = value;
+  if (typeof raw === 'number' && raw > 0 && raw < 1e12) raw = raw * 1000;
+  const d = raw instanceof Date ? raw : new Date(raw);
   if (Number.isNaN(d.getTime())) return '';
   const now = Date.now();
   const diffSec = Math.round((now - d.getTime()) / 1000);
@@ -215,7 +218,7 @@ export function formatRelative(value) {
   }
   if (unit === undefined) {
     amount = Math.round(abs / (86400 * 365));
-    unit = 'г';
+    unit = amount === 1 ? 'год' : amount < 5 ? 'года' : 'лет';
   }
   label = `${amount} ${unit}`;
   return diffSec >= 0 ? `${label} назад` : `через ${label}`;

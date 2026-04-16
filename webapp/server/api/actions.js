@@ -92,6 +92,7 @@ const selectActionStatsStmt = db.prepare(
   `SELECT COUNT(*)                          AS runs_total,
           COALESCE(SUM(CASE WHEN ok=1 THEN 1 ELSE 0 END), 0) AS runs_ok,
           COALESCE(SUM(tokens_used), 0)     AS tokens_total,
+          COALESCE(SUM(cost), 0)            AS cost_total,
           MAX(created_at)                   AS last_run_at
      FROM action_runs WHERE action_id = ?`,
 );
@@ -112,7 +113,7 @@ function rowToApi(row) {
     }
   }
   const { config_enc, ...rest } = row;
-  let stats = { runs_total: 0, runs_ok: 0, tokens_total: 0, last_run_at: null };
+  let stats = { runs_total: 0, runs_ok: 0, tokens_total: 0, cost_total: 0, last_run_at: null };
   try {
     const s = selectActionStatsStmt.get(row.id);
     if (s) {
@@ -120,6 +121,7 @@ function rowToApi(row) {
         runs_total: s.runs_total ?? 0,
         runs_ok: s.runs_ok ?? 0,
         tokens_total: s.tokens_total ?? 0,
+        cost_total: s.cost_total ?? 0,
         last_run_at: s.last_run_at ?? null,
       };
     }

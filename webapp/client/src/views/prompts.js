@@ -923,6 +923,92 @@ function renderRulesSection() {
   rulesHostRef.appendChild(bottomAdd);
 }
 
+/* -------------------- AI-генерация промта ----------------------------- */
+
+/**
+ * Открывает модалку, в которой пользователь описывает задачу текстом,
+ * а LLM генерирует полную конфигурацию промта (name, system_prompt, output_params).
+ * После генерации результат подставляется в draft и перерисовывается редактор.
+ */
+function openAiGenerateModal() {
+  const descArea = Textarea({
+    label: 'Опишите, что должен делать промт',
+    rows: 6,
+    placeholder:
+      'Например: «Классифицировать письма от клиентов по срочности. Важными считать жалобы, запросы на возврат и письма с упоминанием дедлайнов. Добавлять теги: жалоба, возврат, вопрос, запрос, информация.»',
+    hint: 'Чем подробнее описание — тем лучше результат. AI сгенерирует имя, инструкцию и выходные параметры.',
+  });
+
+  const statusEl = h('div', {
+    class: 'text-xs text-[color:var(--color-text-secondary)] hidden',
+  });
+
+  const generateBtn = Button({
+    label: 'Сгенерировать',
+    icon: 'brain-circuit',
+    onClick: async () => {
+      const ta = descArea.querySelector('textarea');
+      const description = (ta?.value || '').trim();
+      if (!description) {
+        window.alert('Введите описание задачи для промта');
+        return;
+      }
+      if (description.length < 3) {
+        window.alert('Описание слишком короткое — минимум 3 символа');
+        return;
+      }
+      generateBtn.disabled = true;
+      statusEl.textContent = 'AI генерирует промт… Это может занять до 30 секунд.';
+      statusEl.classList.remove('hidden');
+      try {
+        const result = await promptsApi.generate(description);
+        if (!result || !result.ok) {
+          throw new Error(result?.message || 'Не удалось сгенерировать промт');
+        }
+        // Заполняем draft результатами AI.
+        state.selectedId = null;
+        state.draft = makeNewDraft();
+        state.draft.name = result.name || 'AI-промт';
+        state.draft.system_prompt = result.system_prompt || '';
+        if (Array.isArray(result.output_params) && result.output_params.length) {
+          state.draft.output_params = normalizeParams(result.output_params);
+        }
+        // Заполняем rules из AI-ответа.
+        if (Array.isArray(result.rules) && result.rules.length) {
+          state.rules = result.rules.map((r) => normalizeRule({
+            ...r,
+            id: nextTempRuleId(),
+            _expanded: true,
+          }));
+          recomputePriorities();
+        } else {
+          state.rules = [];
+        }
+        state.originalRules = [];
+
+        overlay.close();
+        renderList();
+        renderEditor();
+      } catch (err) {
+        statusEl.textContent = 'Ошибка: ' + (err?.message || String(err));
+        statusEl.classList.remove('hidden');
+      } finally {
+        generateBtn.disabled = false;
+      }
+    },
+  });
+
+  const overlay = Modal({
+    title: 'Создать промт с помощью AI',
+    children: [descArea, statusEl],
+    footer: [
+      Button({ label: 'Отмена', variant: 'ghost', onClick: () => overlay.close() }),
+      generateBtn,
+    ],
+  });
+  document.body.appendChild(overlay);
+}
+
 /* ------------------------------ Editor render ------------------------- */
 
 function openTestModal(promptId) {
@@ -1264,20 +1350,26 @@ export async function renderPrompts(root) {
     SectionHeader({
       title: 'Управление промтами',
       subtitle: 'Системные подсказки для классификации входящих писем',
-      actions: Button({
-        label: 'Новый промт',
-        icon: 'plus',
-        onClick: () => {
-          state.selectedId = null;
-          state.draft = makeNewDraft();
-          // Новый промт — без правил; будут созданы после первого save
-          // (см. batch-сохранение в Ф1.6).
-          state.rules = [];
-          state.originalRules = [];
-          renderList();
-          renderEditor();
-        },
-      }),
+      actions: h('div', { class: 'flex items-center gap-2' }, [
+        Button({
+          label: 'Создать с AI',
+          variant: 'ghost',
+          icon: 'brain-circuit',
+          onClick: () => openAiGenerateModal(),
+        }),
+        Button({
+          label: 'Новый промт',
+          icon: 'plus',
+          onClick: () => {
+            state.selectedId = null;
+            state.draft = makeNewDraft();
+            state.rules = [];
+            state.originalRules = [];
+            renderList();
+            renderEditor();
+          },
+        }),
+      ]),
     }),
   );
 

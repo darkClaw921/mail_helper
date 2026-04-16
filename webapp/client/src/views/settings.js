@@ -316,7 +316,69 @@ export async function renderSettings(root) {
     }),
   );
 
-  /* ===== 5. Расширение браузера ===== */
+  /* ===== 5. Валюта отображения ===== */
+  const currencyState = {
+    currency: current.currency || 'USD',
+    currency_rate: current.currency_rate || '',
+  };
+  const currencyStatus = statusIndicator('idle', '');
+
+  const currencySelect = Select({
+    label: 'Валюта отображения стоимости',
+    value: currencyState.currency,
+    options: [
+      { value: 'USD', label: 'USD ($)' },
+      { value: 'RUB', label: 'RUB (₽)' },
+    ],
+    onChange: (v) => {
+      currencyState.currency = v;
+      rateInput.style.display = v === 'RUB' ? '' : 'none';
+    },
+  });
+  const rateInput = Input({
+    label: 'Курс USD → RUB',
+    value: currencyState.currency_rate || '',
+    placeholder: 'например, 92.5',
+    hint: 'Сколько рублей за 1 доллар. Стоимость будет пересчитана по этому курсу.',
+    onInput: (v) => { currencyState.currency_rate = v; },
+  });
+  // Скрыть поле курса если валюта = USD.
+  if (currencyState.currency !== 'RUB') rateInput.style.display = 'none';
+
+  const currencySaveBtn = Button({
+    label: 'Сохранить',
+    icon: 'check',
+    onClick: async () => {
+      const payload = { currency: currencyState.currency };
+      if (currencyState.currency === 'RUB') {
+        const rate = parseFloat(currencyState.currency_rate);
+        if (!rate || rate <= 0) {
+          window.alert('Укажите корректный курс USD → RUB');
+          return;
+        }
+        payload.currency_rate = rate;
+      }
+      try {
+        await settingsApi.update(payload);
+        currencyStatus.replaceChildren(statusDot('success'), h('span', { text: 'Сохранено' }));
+      } catch (err) {
+        currencyStatus.replaceChildren(statusDot('error'), h('span', { text: 'Ошибка: ' + (err?.message || err) }));
+      }
+    },
+  });
+  wrap.appendChild(
+    Card({
+      title: 'Валюта',
+      subtitle: 'Валюта отображения расходов на LLM',
+      children: [
+        currencySelect,
+        rateInput,
+        h('div', { class: 'flex items-center gap-3' }, [currencySaveBtn, currencyStatus]),
+      ],
+    }),
+  );
+
+  /* ===== 6. Расширение браузера ===== */
   const extInstructions = h('div', { class: 'flex flex-col gap-3 text-sm text-[color:var(--color-text-secondary)]' }, [
     h('p', {}, 'Расширение MailMind для Chrome устанавливается вручную из директории extension/.'),
     h('ol', { class: 'list-decimal pl-5 space-y-1' }, [

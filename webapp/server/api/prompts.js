@@ -82,6 +82,141 @@ router.get('/', (_req, res) => {
   res.json({ prompts: selectAllStmt.all().map(shapeRow) });
 });
 
+// POST /api/prompts/generate — AI-генерация промта по описанию пользователя.
+// Body: { description: string } — текстовое описание задачи на естественном языке.
+// Возвращает: { name, system_prompt, output_params }.
+const generateSchema = z
+  .object({
+    description: z.string().min(3).max(5000),
+  })
+  .strict();
+
+const GENERATE_SYSTEM_PROMPT = `Ты — эксперт по созданию промтов для email-классификатора MailMind AI.
+
+Пользователь опишет, что ему нужно. Ты должен сгенерировать полную конфигурацию промта, включая правила маршрутизации (actions).
+
+Верни СТРОГО JSON объект с полями:
+{
+  "name": "Краткое название промта (до 60 символов, на языке описания пользователя)",
+  "system_prompt": "Инструкция для LLM-классификатора. Опиши ТОЛЬКО бизнес-логику: что считать важным, какие категории/теги ставить, критерии классификации. НЕ включай описание формата входа (subject/from/body) и структуры JSON-ответа — они добавляются автоматически. Пиши от второго лица ('Ты — классификатор...'). На языке описания пользователя.",
+  "output_params": [
+    {
+      "key": "имя_поля (латиница, snake_case)",
+      "type": "boolean|string|number|string[]|object",
+      "description": "Описание поля для LLM",
+      "required": true_или_false
+    }
+  ],
+  "rules": [
+    {
+      "match_expr": "выражение-условие, например: important == true",
+      "type": "telegram|webhook|forward|browser",
+      "config": {},
+      "enabled": 1
+    }
+  ]
+}
+
+Правила для output_params:
+- Всегда включай базовые поля: important (boolean), reason (string), tags (string[]), summary (string)
+- Добавляй дополнительные поля если они нужны для описанной задачи
+- key должен быть валидным идентификатором: начинается с буквы или _, содержит только латиницу, цифры и _
+- type один из: boolean, string, number, string[], object
+
+Правила для rules (действия маршрутизации):
+- Генерируй правила на основе описания пользователя
+- match_expr — безопасное выражение-условие. Доступные переменные: имена из output_params (important, reason, tags, summary и кастомные). Операторы: ==, !=, &&, ||, !. Единственный метод: .includes(). Литералы: строки в кавычках, числа, true, false, null. Примеры: "important == true", "tags.includes('urgent')", "important == true && tags.includes('finance')"
+- type — тип действия: "telegram" (отправка в Telegram), "webhook" (HTTP POST на URL), "forward" (пересылка email), "browser" (браузерное уведомление)
+- config зависит от type:
+  - telegram: { "chat_id": "ID чата (пользователь заполнит)", "template": "опционально: шаблон с {subject}, {from}, {summary}, {reason}, {tags}" }
+  - webhook: { "url": "URL (пользователь заполнит)" }
+  - forward: { "to_email": "email (пользователь заполнит)" }
+  - browser: { "title": "Заголовок уведомления" }
+- Если пользователь упоминает Telegram — создай telegram-правило
+- Если упоминает уведомления — создай browser-правило
+- Если упоминает пересылку — создай forward-правило
+- Если упоминает webhook/API — создай webhook-правило
+- Если ничего конкретного не упомянуто, создай browser-правило для важных писем (match_expr: "important == true")
+- enabled: 1 — правило активно
+- Для config оставляй плейсхолдеры (пустые строки) для полей, которые пользователь должен заполнить сам (chat_id, url, to_email)
+
+Генерируй качественную, детальную инструкцию в system_prompt. Она должна быть достаточно подробной, чтобы LLM понимал критерии классификации.`;
+
+router.post('/generate', async (req, res) => {
+  const parsed = generateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'validation_error', details: parsed.error.errors });
+  }
+
+  const t0 = Date.now();
+  try {
+    const out = await classify({
+      systemPrompt: GENERATE_SYSTEM_PROMPT,
+      userPrompt: parsed.data.description,
+      timeoutMs: 60_000,
+    });
+
+    const result = out.result;
+    if (!result || typeof result.name !== 'string' || typeof result.system_prompt !== 'string') {
+      return res.status(502).json({
+        error: 'llm_bad_response',
+        message: 'LLM вернул некорректную структуру',
+        raw: result,
+        duration_ms: out.durationMs,
+      });
+    }
+
+    const params = Array.isArray(result.output_params)
+      ? result.output_params
+          .filter((p) => p && typeof p.key === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(p.key))
+          .map((p) => ({
+            key: p.key,
+            type: OUTPUT_PARAM_TYPES.includes(p.type) ? p.type : 'string',
+            description: typeof p.description === 'string' ? p.description : '',
+            required: p.required === true,
+          }))
+      : [];
+
+    // Нормализуем rules.
+    const VALID_RULE_TYPES = ['telegram', 'webhook', 'forward', 'browser'];
+    const rules = Array.isArray(result.rules)
+      ? result.rules
+          .filter((r) => r && typeof r === 'object' && VALID_RULE_TYPES.includes(r.type))
+          .map((r) => ({
+            match_expr: typeof r.match_expr === 'string' ? r.match_expr : '1 == 1',
+            type: r.type,
+            config: r.config && typeof r.config === 'object' ? r.config : {},
+            enabled: r.enabled === 0 ? 0 : 1,
+          }))
+      : [];
+
+    return res.json({
+      ok: true,
+      name: result.name,
+      system_prompt: result.system_prompt,
+      output_params: params,
+      rules,
+      tokens_used: out.usage?.total_tokens ?? null,
+      duration_ms: out.durationMs,
+    });
+  } catch (err) {
+    const durationMs = Date.now() - t0;
+    if (err && err.code === 'openrouter_key_missing') {
+      return res.status(400).json({
+        error: 'openrouter_key_missing',
+        message: 'openrouter_api_key не настроен в /api/settings',
+        duration_ms: durationMs,
+      });
+    }
+    const status = err?.status && err.status >= 400 && err.status < 600 ? err.status : 502;
+    return res.status(status === 400 || status === 401 || status === 403 ? status : 502).json({
+      error: 'llm_error',
+      message: err?.message || 'LLM error',
+      duration_ms: durationMs,
+    });
+  }
+});
+
 router.get('/:id', (req, res) => {
   const id = Number.parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });

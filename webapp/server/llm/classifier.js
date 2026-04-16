@@ -135,26 +135,34 @@ export function composeSystemPrompt(userInstruction, opts = {}) {
 }
 
 const selectDefaultEnabled = db.prepare(
-  'SELECT id, name, system_prompt, output_schema, is_default, enabled ' +
+  'SELECT id, name, system_prompt, output_schema, output_params, model, is_default, enabled ' +
     'FROM prompts WHERE enabled = 1 AND is_default = 1 LIMIT 1',
 );
 const selectAnyEnabled = db.prepare(
-  'SELECT id, name, system_prompt, output_schema, is_default, enabled ' +
+  'SELECT id, name, system_prompt, output_schema, output_params, model, is_default, enabled ' +
     'FROM prompts WHERE enabled = 1 ORDER BY is_default DESC, id ASC LIMIT 1',
 );
 const selectAnyDefault = db.prepare(
-  'SELECT id, name, system_prompt, output_schema, is_default, enabled ' +
+  'SELECT id, name, system_prompt, output_schema, output_params, model, is_default, enabled ' +
     'FROM prompts WHERE is_default = 1 LIMIT 1',
+);
+const selectAllEnabled = db.prepare(
+  'SELECT id, name, system_prompt, output_schema, output_params, model, is_default, enabled ' +
+    'FROM prompts WHERE enabled = 1 ORDER BY is_default DESC, id ASC',
 );
 const updateMessageStmt = db.prepare(
   `UPDATE messages
-      SET classification_json = ?, is_important = ?, prompt_id = ?, tokens_used = ?
+      SET classification_json = ?, is_important = ?, prompt_id = ?, tokens_used = ?, cost = ?
     WHERE id = ?`,
+);
+// Обновить только tokens_used и cost (для накопления суммы по всем промтам).
+const updateMessageCostStmt = db.prepare(
+  `UPDATE messages SET tokens_used = ?, cost = ? WHERE id = ?`,
 );
 const selectMessageStmt = db.prepare(
   `SELECT id, account_id, uid, message_id, subject, from_addr, to_addr, date,
           snippet, body_text, body_html, is_read, is_important,
-          classification_json, prompt_id, tokens_used, created_at
+          classification_json, prompt_id, tokens_used, cost, created_at
      FROM messages WHERE id = ?`,
 );
 
@@ -165,6 +173,15 @@ export function pickPromptForMessage() {
   return (
     selectDefaultEnabled.get() || selectAnyEnabled.get() || selectAnyDefault.get() || null
   );
+}
+
+/**
+ * Все enabled промты, отсортированные: is_default DESC, id ASC.
+ * Используется в pipeline для мультипромтовой классификации.
+ * @returns {Array<object>}
+ */
+export function getAllEnabledPrompts() {
+  return selectAllEnabled.all();
 }
 
 function clip(s, max) {
@@ -227,6 +244,7 @@ export async function classifyMessage(messageRow, opts = {}) {
       prompt_id: messageRow.prompt_id ?? null,
       durationMs: 0,
       tokens: null,
+      cost: null,
       cached: true,
     };
   }
@@ -269,8 +287,8 @@ export async function classifyMessage(messageRow, opts = {}) {
       'LLM classification failed',
     );
     if (persist) {
-      // На ошибке tokens не известны — пишем null.
-      updateMessageStmt.run(JSON.stringify(errorPayload), 0, prompt.id, null, messageRow.id);
+      // На ошибке tokens и cost не известны — пишем null.
+      updateMessageStmt.run(JSON.stringify(errorPayload), 0, prompt.id, null, null, messageRow.id);
     }
     return {
       ok: false,
@@ -279,11 +297,13 @@ export async function classifyMessage(messageRow, opts = {}) {
       prompt_id: prompt.id,
       durationMs: 0,
       tokens: null,
+      cost: null,
     };
   }
 
   // Парсинг в объект прошёл в openrouter.classify(). Дополнительно убеждаемся что это объект.
   const usageTokens = usage?.total_tokens ?? null;
+  const usageCost = typeof usage?.cost === 'number' ? usage.cost : null;
   if (!result || typeof result !== 'object') {
     const msg = 'LLM returned non-object JSON';
     log.error(
@@ -292,7 +312,7 @@ export async function classifyMessage(messageRow, opts = {}) {
     );
     const errorPayload = { error: true, message: msg };
     if (persist) {
-      updateMessageStmt.run(JSON.stringify(errorPayload), 0, prompt.id, usageTokens, messageRow.id);
+      updateMessageStmt.run(JSON.stringify(errorPayload), 0, prompt.id, usageTokens, usageCost, messageRow.id);
     }
     return {
       ok: false,
@@ -301,13 +321,14 @@ export async function classifyMessage(messageRow, opts = {}) {
       prompt_id: prompt.id,
       durationMs,
       tokens: usageTokens,
+      cost: usageCost,
     };
   }
 
   const isImportant = result.important === true ? 1 : 0;
 
   if (persist) {
-    updateMessageStmt.run(JSON.stringify(result), isImportant, prompt.id, usageTokens, messageRow.id);
+    updateMessageStmt.run(JSON.stringify(result), isImportant, prompt.id, usageTokens, usageCost, messageRow.id);
   }
 
   log.info(
@@ -315,7 +336,8 @@ export async function classifyMessage(messageRow, opts = {}) {
       message_id: messageRow.id,
       prompt_id: prompt.id,
       important: isImportant === 1,
-      tokens: usage?.total_tokens ?? null,
+      tokens: usageTokens,
+      cost: usageCost,
       durationMs,
     },
     'message classified',
@@ -326,7 +348,8 @@ export async function classifyMessage(messageRow, opts = {}) {
     result,
     prompt_id: prompt.id,
     durationMs,
-    tokens: usage?.total_tokens ?? null,
+    tokens: usageTokens,
+    cost: usageCost,
   };
 }
 
@@ -335,6 +358,14 @@ export async function classifyMessage(messageRow, opts = {}) {
  */
 export function getMessageById(id) {
   return selectMessageStmt.get(id) || null;
+}
+
+/**
+ * Обновить только tokens_used и cost (суммарные по всем промтам).
+ * Вызывается из pipeline после мультипромтовой классификации.
+ */
+export function updateMessageTotals(id, totalTokens, totalCost) {
+  updateMessageCostStmt.run(totalTokens, totalCost, id);
 }
 
 /**

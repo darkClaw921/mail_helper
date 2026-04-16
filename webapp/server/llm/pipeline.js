@@ -1,17 +1,15 @@
-// pipeline.js — подписка на mailEvents.'message:stored' и запуск LLM-классификации.
+// pipeline.js — мультипромтовая классификация входящих писем.
 //
-// Экспортирует registerClassifierPipeline() — вызывается один раз при старте сервера.
-// Поведение:
-//   * На каждое событие mailEvents.emit('message:stored', { message }) запускает
-//     асинхронно classifyMessage(message). Ошибки не валят pipeline, только логируются.
-//   * Если openrouter_api_key не задан — skip с warn.
-//   * Если уже есть classification_json — classifyMessage вернёт cached и мы всё равно
-//     эмитим 'message:classified' (для WS hub / actions runner).
-//   * После успешной классификации загружает свежую запись из БД и эмитит
-//     mailEvents.emit('message:classified', { message, classification, prompt }).
+// Подписывается на mailEvents.'message:stored' и для каждого письма:
+//   1. Получает ВСЕ enabled промты через getAllEnabledPrompts().
+//   2. Дефолтный промт (первый, is_default DESC) — persist=true (пишет
+//      classification_json/is_important/prompt_id в messages для UI).
+//   3. Остальные промты — persist=false (только для dispatch actions).
+//   4. После всех промтов — UPDATE messages.tokens_used/cost суммой ВСЕХ запросов.
+//   5. Для каждого успешного промта эмитит 'message:classified' с per-prompt
+//      tokens/cost в payload (для корректной атрибуции в runner).
 //
-// Идемпотентность:
-//   Сам registerClassifierPipeline() — один раз за процесс; повторный вызов игнорируется.
+// Идемпотентность: registerClassifierPipeline() — один раз за процесс.
 
 import { mailEvents } from '../mail/events.js';
 import { logger } from '../logger.js';
@@ -20,7 +18,9 @@ import {
   classifyMessage,
   getMessageById,
   isLlmConfigured,
+  getAllEnabledPrompts,
   pickPromptForMessage,
+  updateMessageTotals,
 } from './classifier.js';
 
 const log = logger.child({ module: 'llmPipeline' });
@@ -45,6 +45,62 @@ function rowForApi(row) {
   return { ...rest, classification };
 }
 
+/**
+ * Классифицирует письмо одним промтом и эмитит 'message:classified'.
+ * Возвращает { tokens, cost } для накопления суммы.
+ */
+async function classifyWithPrompt(message, prompt, persist) {
+  try {
+    const out = await classifyMessage(message, {
+      prompt,
+      persist,
+      force: true,
+    });
+    if (!out.ok) {
+      log.warn(
+        { message_id: message.id, prompt_id: prompt.id, prompt_name: prompt.name },
+        'classification failed for prompt',
+      );
+      return { tokens: out.tokens ?? 0, cost: out.cost ?? 0 };
+    }
+
+    let apiMessage;
+    if (persist) {
+      const fresh = getMessageById(message.id);
+      apiMessage = rowForApi(fresh) || message;
+    } else {
+      apiMessage = { ...message, classification: out.result };
+    }
+
+    // Per-prompt tokens/cost передаём в event — runner использует их
+    // для атрибуции в action_runs, а не messages.tokens_used.
+    mailEvents.emit('message:classified', {
+      message: apiMessage,
+      classification: out.result,
+      prompt: prompt || null,
+      tokens: out.tokens ?? null,
+      cost: out.cost ?? null,
+    });
+
+    return { tokens: out.tokens ?? 0, cost: out.cost ?? 0 };
+  } catch (err) {
+    if (err && err.code === 'openrouter_key_missing') {
+      log.warn({ message_id: message.id }, 'openrouter_api_key missing at call time — skipped');
+      return { tokens: 0, cost: 0 };
+    }
+    log.error(
+      {
+        err: err?.message || String(err),
+        message_id: message.id,
+        prompt_id: prompt.id,
+        prompt_name: prompt.name,
+      },
+      'classifier pipeline error for prompt',
+    );
+    return { tokens: 0, cost: 0 };
+  }
+}
+
 async function handleStored({ message }) {
   if (!message || !message.id) {
     log.warn('message:stored without message.id — ignoring');
@@ -59,47 +115,65 @@ async function handleStored({ message }) {
     return;
   }
 
-  try {
-    const out = await classifyMessage(message);
-    if (!out.ok) {
-      // classifyMessage уже залогировала + записала error payload в БД.
+  const prompts = getAllEnabledPrompts();
+  if (!prompts.length) {
+    const fallback = pickPromptForMessage();
+    if (!fallback) {
+      log.warn({ message_id: message.id }, 'no prompts found — skipping classification');
       return;
     }
-    // Перечитываем свежее состояние (с обновлёнными classification_json/is_important).
-    const fresh = getMessageById(message.id);
-    const apiMessage = rowForApi(fresh) || message;
-    const prompt = out.prompt_id ? selectPromptStmt.get(out.prompt_id) : pickPromptForMessage();
-
-    mailEvents.emit('message:classified', {
-      message: apiMessage,
-      classification: out.result,
-      prompt: prompt || null,
-    });
-  } catch (err) {
-    // Ключ мог быть убран между проверкой и вызовом, либо другая сквозная ошибка.
-    if (err && err.code === 'openrouter_key_missing') {
-      log.warn({ message_id: message.id }, 'openrouter_api_key missing at call time — skipped');
-      return;
-    }
-    log.error(
-      { err: err?.message || String(err), message_id: message.id },
-      'classifier pipeline unexpected error',
-    );
+    await classifyWithPrompt(message, fallback, true);
+    return;
   }
+
+  // Классифицируем ВСЕМИ промтами, накапливаем суммарные tokens/cost.
+  let totalTokens = 0;
+  let totalCost = 0;
+
+  for (let i = 0; i < prompts.length; i++) {
+    const prompt = prompts[i];
+    const isFirst = i === 0;
+    const { tokens, cost } = await classifyWithPrompt(message, prompt, isFirst);
+    totalTokens += tokens || 0;
+    totalCost += cost || 0;
+  }
+
+  // UPDATE messages с суммарными tokens/cost по ВСЕМ промтам.
+  // Дефолтный промт уже записал свои tokens/cost через persist=true —
+  // перезаписываем суммой (включая его).
+  if (totalTokens > 0 || totalCost > 0) {
+    try {
+      updateMessageTotals(
+        message.id,
+        totalTokens || null,
+        totalCost || null,
+      );
+    } catch (err) {
+      log.error(
+        { err: err?.message || String(err), message_id: message.id },
+        'failed to update message totals',
+      );
+    }
+  }
+
+  log.info(
+    {
+      message_id: message.id,
+      prompts_count: prompts.length,
+      total_tokens: totalTokens,
+      total_cost: totalCost,
+    },
+    'multi-prompt classification complete',
+  );
 }
 
-/**
- * Зарегистрировать подписку classifier-pipeline на mailEvents.'message:stored'.
- * Идемпотентно — повторный вызов ничего не делает.
- */
 export function registerClassifierPipeline() {
   if (registered) return;
   registered = true;
   mailEvents.on('message:stored', (payload) => {
-    // Не await'им — pipeline асинхронный, но ошибки ловим внутри handleStored.
     handleStored(payload).catch((err) =>
       log.error({ err: err?.message || String(err) }, 'unhandled pipeline error'),
     );
   });
-  log.info('classifier pipeline registered (message:stored → classify → message:classified)');
+  log.info('classifier pipeline registered (message:stored → classify ALL enabled prompts → message:classified)');
 }

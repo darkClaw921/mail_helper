@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS messages (
   classification_json TEXT,
   prompt_id           INTEGER,
   tokens_used         INTEGER,                   -- total_tokens от LLM классификации
+  cost                REAL,                      -- стоимость классификации в USD (из OpenRouter usage.cost)
   created_at          INTEGER,
   UNIQUE(account_id, uid)
 );
@@ -89,6 +90,7 @@ CREATE TABLE IF NOT EXISTS action_runs (
   ok           INTEGER NOT NULL DEFAULT 0,
   error        TEXT,
   tokens_used  INTEGER,
+  cost         REAL,                      -- стоимость LLM-классификации в USD (per-prompt, из OpenRouter usage.cost)
   created_at   INTEGER NOT NULL
 );
 
