@@ -124,7 +124,34 @@ function resource(basePath) {
 
 export const accountsApi = resource('/api/accounts');
 export const promptsApi = resource('/api/prompts');
-export const actionsApi = resource('/api/actions');
+export const actionsApi = {
+  ...resource('/api/actions'),
+  /**
+   * Вернуть правила (actions), привязанные к конкретному промту.
+   * @param {number|null|undefined} promptId
+   *   Для null/undefined — возвращает пустой массив (нет промта — нет правил).
+   *   Для положительного целого — GET /api/actions?prompt_id=<id>.
+   * @returns {Promise<Array<object>>} массив правил (поле config — plain JSON).
+   */
+  listByPrompt: async (promptId) => {
+    if (promptId == null) return [];
+    const resp = await apiFetch(`/api/actions?prompt_id=${encodeURIComponent(promptId)}`);
+    return Array.isArray(resp?.actions) ? resp.actions : [];
+  },
+  /**
+   * Валидация match_expr через серверный evaluator без сохранения.
+   * Backend возвращает 200 {ok:true} или 200 {ok:false, error} — ошибка
+   * компиляции это НЕ исключение, а ожидаемый флоу.
+   *
+   * @param {{ expr: string, promptId?: number|null }} arg
+   * @returns {Promise<{ok:true}|{ok:false,error:string}>}
+   */
+  validateExpr: ({ expr, promptId } = {}) =>
+    apiFetch('/api/actions/validate-expr', {
+      method: 'POST',
+      body: { expr, prompt_id: promptId ?? null },
+    }),
+};
 export const messagesApi = resource('/api/messages');
 
 // settings — не-/:id ресурс, GET/PUT на корне.

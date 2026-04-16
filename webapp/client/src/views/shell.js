@@ -101,7 +101,7 @@ function buildSidebar(activeId) {
   return sidebar;
 }
 
-function buildTopbar() {
+function buildTopbar(activeId) {
   const topbar = document.createElement('header');
   topbar.className = 'flex items-center justify-between gap-4 border-b border-[color:var(--color-border-subtle)] bg-[color:var(--color-bg-card)] px-6 py-3';
 
@@ -114,6 +114,40 @@ function buildTopbar() {
   search.type = 'search';
   search.placeholder = 'Поиск писем, правил, промтов…';
   search.className = 'input pl-9';
+  // Восстанавливаем текущий query (если был выставлен на прошлом экране).
+  try {
+    const q = window.__globalSearchQuery || '';
+    if (q) search.value = q;
+  } catch (_) { /* noop */ }
+
+  function emitSearch(q, { navigate = false } = {}) {
+    window.__globalSearchQuery = q;
+    if (navigate) {
+      const target = '#/inbox';
+      if (window.location.hash !== target) {
+        window.location.hash = target;
+        // hashchange перерендерит view, который сам подхватит __globalSearchQuery
+        return;
+      }
+    }
+    window.dispatchEvent(new CustomEvent('global-search', { detail: { q } }));
+  }
+
+  search.addEventListener('input', (e) => {
+    const q = e.target.value;
+    // На экранах с собственным поиском — стримим ввод сразу; иначе ждём Enter.
+    if (activeId === 'inbox' || activeId === 'prompts') {
+      emitSearch(q);
+    } else {
+      window.__globalSearchQuery = q;
+    }
+  });
+  search.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      emitSearch(e.target.value, { navigate: true });
+    }
+  });
   searchWrap.append(searchIcon, search);
 
   // Right side
@@ -163,7 +197,7 @@ export function renderShell(a, b) {
 
   const right = document.createElement('div');
   right.className = 'flex flex-1 flex-col min-w-0 bg-[color:var(--color-bg-surface)]';
-  right.appendChild(buildTopbar());
+  right.appendChild(buildTopbar(activeId));
 
   const main = document.createElement('main');
   main.className = 'flex-1 p-6 overflow-auto';

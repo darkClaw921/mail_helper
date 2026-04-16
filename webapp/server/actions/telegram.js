@@ -20,6 +20,7 @@
 import { db } from '../db/index.js';
 import { decrypt } from '../db/crypto.js';
 import { logger } from '../logger.js';
+import { renderTemplate } from './template.js';
 
 const log = logger.child({ module: 'action:telegram' });
 
@@ -125,7 +126,13 @@ export async function sendTelegram(config, message, classification) {
     return { ok: false, error: 'telegram: telegram_bot_token is not configured' };
   }
 
-  const text = formatTelegramText(message, classification);
+  // Если пользователь задал свой шаблон (config.template) — рендерим его с
+  // HTML-экранированием подставленных значений (parse_mode='HTML'). Иначе —
+  // стандартный формат formatTelegramText.
+  const tpl = typeof config?.template === 'string' ? config.template.trim() : '';
+  const text = tpl
+    ? renderTemplate(tpl, { message, classification }, { escape: escapeHtml })
+    : formatTelegramText(message, classification);
   const payload = {
     chat_id: chatId,
     text,

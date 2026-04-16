@@ -1,52 +1,82 @@
-# Mail Helper
+<div align="center">
 
-Локальный ассистент-почты: слушает IMAP, пропускает каждое входящее письмо через LLM (OpenRouter), применяет настраиваемые actions (Telegram / webhook / пересылка SMTP / браузерная нотификация), и отдаёт "важные" письма в sidebar Chrome-расширения, которое инжектится в Gmail и Yandex.Mail.
+# 📬 MailMind AI
 
-Двунаправленная синхронизация флага "прочитано": отметил в sidebar — IMAP получает `\Seen`; отметил в Gmail — sidebar обновляется из IDLE flags event.
+**Локальный почтовый ассистент с LLM-классификацией, автоматизациями и Chrome-расширением**
 
-## Состав
+![Actions & Automation](./Actions%20%26%20Automation.png)
 
-- `webapp/server/` — Express + WebSocket backend: IMAP воркеры, LLM классификатор, actions runner, REST API, WS hub.
-- `webapp/client/` — Vite + Tailwind web UI для настройки (ключи, аккаунты, промты, actions).
-- `extension/` — Chrome MV3 расширение (service worker + content scripts + sidebar iframe).
-- `architecture.md` — подробная карта проекта с описанием каждого файла.
+</div>
 
-## Требования
+<p align="center">
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/NODE.JS-20%2B-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node"></a>
+  <a href="https://developer.chrome.com/docs/extensions/mv3/intro/"><img src="https://img.shields.io/badge/CHROME-MV3-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Chrome MV3"></a>
+  <a href="https://openrouter.ai/"><img src="https://img.shields.io/badge/OPENROUTER-GROK--4--FAST-8A2BE2?style=for-the-badge&logo=openai&logoColor=white" alt="OpenRouter"></a>
+  <a href="https://vitejs.dev/"><img src="https://img.shields.io/badge/VITE-TAILWIND_V4-646CFF?style=for-the-badge&logo=vite&logoColor=white" alt="Vite"></a>
+  <a href="https://www.sqlite.org/"><img src="https://img.shields.io/badge/SQLITE-WAL-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="SQLite"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/LICENSE-MIT-FACC15?style=for-the-badge" alt="License: MIT"></a>
+</p>
 
-- **Node.js 20+** (используется встроенный fetch, WebSocket API, ESM).
-- **Google Chrome** (или любой Chromium) для расширения (Manifest V3).
-- IMAP-аккаунт с разрешённым IMAP и (для Gmail) app password.
-- Ключ [OpenRouter](https://openrouter.ai/) — используется модель `x-ai/grok-4-fast`.
-- Опционально: Telegram bot token + chat id (для telegram action), любой webhook URL, SMTP креды (для forward action).
+---
 
-## Установка и запуск backend
+## ✨ Что умеет
+
+- 🧠 **LLM-классификация** каждого входящего письма через OpenRouter (`x-ai/grok-4-fast` по умолчанию).
+- ⚡ **Actions & Automation** — правила «триггер → действие»: Telegram, webhook, SMTP-forward, браузерная нотификация.
+- 🔁 **Двусторонний sync флага `\Seen`**: отметил в sidebar → IMAP; отметил в Gmail → sidebar обновляется из IDLE.
+- 🧩 **Chrome MV3 расширение** инжектит sidebar в Gmail и Yandex.Mail.
+- 🔐 **AES-256-GCM** для всех секретов в SQLite (IMAP/SMTP/Telegram/API-keys).
+- 🪝 **WebSocket live-поток** событий в UI и расширение без поллинга.
+
+---
+
+## 🏗 Состав репозитория
+
+| Каталог | Что внутри |
+|---|---|
+| [`webapp/server/`](webapp/server/) | Express + WS backend: IMAP воркеры, LLM classifier, actions runner, REST, WS hub |
+| [`webapp/client/`](webapp/client/) | Vite + Tailwind v4 web UI (dashboard, prompts, actions, settings) |
+| [`extension/`](extension/) | Chrome MV3 extension (SW + content-scripts + sidebar iframe) |
+| [`architecture.md`](./architecture.md) | Полная карта проекта с описанием каждого файла |
+
+---
+
+## 📋 Требования
+
+- **Node.js 20+** (встроенный `fetch`, WebSocket API, ESM).
+- **Google Chrome** / Chromium для расширения (Manifest V3).
+- IMAP-аккаунт с разрешённым IMAP и app password (для Gmail/Yandex).
+- Ключ [OpenRouter](https://openrouter.ai/).
+- Опционально: Telegram bot token + chat id, webhook URL, SMTP креды.
+
+---
+
+## 🚀 Быстрый старт
+
+### 1. Установка backend
 
 ```bash
 cd webapp
 npm install
 ```
 
-### 1. Сгенерировать MASTER_KEY
+### 2. Сгенерировать `MASTER_KEY`
 
-AES-256-GCM ключ для шифрования паролей IMAP/SMTP и секретов в SQLite (32 байта = 64 hex символа):
+AES-256-GCM ключ (32 байта = 64 hex) для шифрования паролей в SQLite:
 
 ```bash
 openssl rand -hex 32
-```
-
-Или, без openssl:
-
-```bash
+# или без openssl:
 node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))'
 ```
 
-### 2. Создать `.env`
+> ⚠️ Потеря `MASTER_KEY` = невозможность расшифровать пароли. Удалите `data.db`, заведите новый ключ, добавьте аккаунты заново.
+
+### 3. Создать `.env`
 
 ```bash
 cp .env.example .env
 ```
-
-Открыть `webapp/.env` и заполнить `MASTER_KEY` значением из шага 1. Пример:
 
 ```dotenv
 PORT=3000
@@ -55,98 +85,133 @@ DB_PATH=./data.db
 LOG_LEVEL=info
 ```
 
-> Если вы потеряете `MASTER_KEY`, расшифровать уже сохранённые в БД пароли не получится — удалите `data.db`, заведите новый ключ, и добавьте аккаунты заново.
-
-### 3. Инициализировать БД
+### 4. Инициализировать БД
 
 ```bash
 npm run init-db
 ```
 
-Создаёт `webapp/data.db` по схеме `server/db/schema.sql`, сиидит один дефолтный промт и генерирует `api_key` (показывается в логах).
+Создаёт `webapp/data.db` по схеме `server/db/schema.sql`, сидит дефолтный промт, генерирует `api_key` (виден в логах).
 
-### 4. Запустить в dev-режиме
+### 5. Dev-режим
 
 ```bash
 npm run dev
 ```
 
-Поднимет:
-- Express API + WebSocket на `http://localhost:3000` (backend)
-- Vite dev-сервер web UI на `http://localhost:5173` с проксированием `/api` и `/ws` на `:3000`
+| Сервис | URL |
+|---|---|
+| Backend API + WS | `http://localhost:3000` |
+| Web UI (Vite + proxy) | `http://localhost:5173` |
 
-Откройте `http://localhost:5173` в браузере.
+---
 
-### 5. Настроить через web UI
+## ⚙️ Настройка через Web UI
 
-1. При первом заходе backend запросит X-API-Key — возьмите его из логов сервера (`api_key generated`) или из `GET /api/settings` через curl. В самом UI ключ запрашивается один раз и сохраняется в `sessionStorage`.
-2. В разделе **Settings** вставьте свой **OpenRouter API key** и нажмите Save.
-3. Опционально введите **Telegram bot token** (глобальный токен; отдельные actions используют разные `chat_id`).
-4. Разделы web UI:
-   - **Accounts** — добавить IMAP-ящики (host, port, tls, user, пароль/app password). Кнопка "Test" проверяет IMAP+SMTP.
-   - **Prompts** — редактировать `system_prompt` и `output_schema` (JSON schema для classification). Один промт помечен `is_default`.
-   - **Actions** — создать цепочку: тип (telegram/webhook/forward/browser), `match_expr` (`important === true`, `tags.includes("promo")` и т.п.), и конфиг (для telegram — chat_id; для webhook — url; для forward — SMTP + to; для browser — пусто).
+1. При первом заходе UI запросит **X-API-Key** — возьмите из логов (`api_key generated`). Хранится в `sessionStorage`.
+2. **Settings** → вставить **OpenRouter API key** (обязательно) и Telegram bot token (опционально).
+3. **Accounts** → добавить IMAP-ящик, кнопка **Test** проверяет IMAP + SMTP.
+4. **Prompts** → редактировать `system_prompt` + `output_params` (динамический JSON-контракт).
+5. **Actions** → создать правило: `type` (telegram/webhook/forward/browser) + `match_expr` + `config`.
 
-Для **Gmail**:
-- Включите двухфакторную аутентификацию в Google Account.
-- Создайте App Password: [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords). Именно его (а не пароль от аккаунта) указывайте как IMAP пароль.
-- IMAP: `imap.gmail.com:993`, TLS.
-- SMTP (для forward action): `smtp.gmail.com:465`, TLS.
+### Gmail
 
-Для **Yandex**:
-- [id.yandex.ru](https://id.yandex.ru/) → Пароли приложений → создать пароль для "Почты".
-- IMAP: `imap.yandex.ru:993`, TLS.
+- Включить 2FA в Google Account.
+- [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) → сгенерировать App Password.
+- IMAP: `imap.gmail.com:993` (TLS). SMTP: `smtp.gmail.com:465` (TLS).
 
-## Установка Chrome extension
+### Yandex
 
-1. Откройте `chrome://extensions`.
-2. Включите **Developer mode** (в правом верхнем углу).
-3. Нажмите **Load unpacked** и выберите каталог `mail_helper/extension/`.
-4. Откройте options страницу расширения (правый клик по иконке → Options или `chrome://extensions` → Details → Extension options).
-5. Заполните:
-   - **Backend URL**: `http://localhost:3000` (без завершающего `/`).
-   - **API key**: тот же `api_key` который используете в web UI.
-   - **Notify on important**: включено по умолчанию — показывает `chrome.notifications` на письмах с `important === true`.
-6. Сохраните. Background service worker автоматически откроет WebSocket к `/ws?token=<api_key>` и начнёт получать события.
+- [id.yandex.ru](https://id.yandex.ru/) → Пароли приложений → Почта.
+- IMAP: `imap.yandex.ru:993` (TLS).
 
-Откройте [mail.google.com](https://mail.google.com/) или [mail.yandex.ru](https://mail.yandex.ru/) — справа появится iframe с sidebar, показывающий последние важные письма. Клик по строке прокручивает Gmail к нужной переписке; кнопка "прочитать" отправляет `mark_read` → WS → backend → IMAP `\Seen`.
+---
 
-## Verification: end-to-end smoke test
+## 🧩 Chrome Extension
 
-После того как backend и extension запущены, пройдитесь по чеклисту:
+<div align="center">
 
-1. **Backend живой.** `curl http://localhost:3000/api/health` → `{"ok":true,...}`.
-2. **API key работает.** В web UI (`http://localhost:5173`) залогиньтесь API-ключом и откройте Settings — поля должны подгрузиться.
-3. **Аккаунт подключается.** В разделе Accounts добавьте ящик, нажмите "Test". Должно вернуть `{ok:true, mailboxes:[...]}`.
-4. **IMAP IDLE активен.** В логах сервера: `imap connected` и `initial lastSeenUid`. Воркер подписан на `exists`/`flags` события.
-5. **Письмо приходит.** Отправьте себе тестовое письмо. В логах: `message stored`. В БД таблица `messages` содержит новую строку с `uid`.
-6. **Классификация сработала.** В логах: `message classified ... important:true/false`. Поле `classification_json` в messages заполнено.
-7. **Telegram action доставляет.** Создайте action с `type=telegram`, `match_expr='true'`, `config={chat_id: <ваш>}`. Пошлите тестовое письмо — должно прилететь в Telegram.
-8. **Web UI показывает письмо.** В разделе Messages (или на главной) новое письмо видно в списке с тегом important.
-9. **Extension получает.** Откройте Gmail. Sidebar справа должен показать то же письмо. В консоли background: `ws open`, приходят `new_message`.
-10. **Mark-as-read синхронизирован.** В sidebar нажмите "прочитать" — в Gmail письмо должно перестать быть жирным; в логах backend `is_read synced ... source:api` и `imap flag updated`.
-11. **Обратная синхронизация.** В Gmail UI отметьте другое письмо прочитанным — sidebar должен обновиться (событие `flags` → `updated`).
-12. **Reconnect.** Прерывайте сеть / убейте процесс `npm run dev` на 30 секунд — при возврате и backend, и extension автоматически восстановят IMAP/WS.
+![Email Plugin Overlay](./Email%20Plugin%20Overlay.png)
 
-## Troubleshooting
+</div>
 
-- **`MASTER_KEY is required (64 hex chars)`** — не заполнен / неправильной длины ключ в `.env`. 64 hex = ровно 32 байта.
-- **IMAP `AUTHENTICATIONFAILED`** — неверный пароль или не выдан app password. Backend теперь не долбит сервер каждые 2с при такой ошибке — держит 60с между попытками.
-- **IMAP отваливается каждые несколько минут** — у некоторых провайдеров короткий IDLE-таймаут; мы сами пере-IDLE раз в 25 минут. Если рвётся чаще — проверьте, что провайдер не закрывает TLS по idle (в логах `imap connection closed`).
-- **LLM ничего не классифицирует, в логах `openrouter_api_key is not configured`** — добавьте ключ в Settings web UI.
-- **Extension sidebar пустой, в options статус `closed`** — неправильный `backend_url` или `api_key`. Проверьте в консоли background SW (chrome://extensions → Service worker → inspect). При смене любого из этих значений WS пересоздаётся автоматически через `storage.onChanged`.
-- **MV3 service worker засыпает** — chrome.alarms с `periodInMinutes: 0.5` держит его живым и триггерит reconnect если WS не в `OPEN`.
-- **`Receiving end does not exist`** в консоли расширения — нормально, sidebar iframe ещё не открыт, сообщение игнорируется.
-- **Web UI отдаёт `401 invalid_api_key`** — зашёл с неправильным ключом; очистите `sessionStorage` и залогиньтесь заново.
+1. `chrome://extensions` → **Developer mode** → **Load unpacked** → выбрать `mail_helper/extension/`.
+2. Options → заполнить **Backend URL** (`http://localhost:3000`) + **API key**.
+3. Открыть Gmail или Yandex — справа появится sidebar. Service worker держит WS к `/ws?token=<api_key>`.
 
-## Полезные команды
+---
+
+## ✅ End-to-end smoke test
+
+| # | Проверка | Ожидаемо |
+|---|---|---|
+| 1 | `curl http://localhost:3000/api/health` | `{"ok":true,...}` |
+| 2 | Web UI Settings | поля подгружаются |
+| 3 | Accounts → Test | `{ok:true, mailboxes:[...]}` |
+| 4 | IMAP IDLE | лог: `imap connected` + `initial lastSeenUid` |
+| 5 | Прислать письмо | лог: `message stored`, строка в `messages` |
+| 6 | LLM classification | лог: `message classified`, `classification_json` заполнен |
+| 7 | Telegram action | сообщение прилетает в Telegram |
+| 8 | Web UI Messages | письмо с тегом important |
+| 9 | Extension sidebar | `new_message` в консоли, письмо в панели |
+| 10 | Mark-as-read (sidebar → IMAP) | Gmail снимает жирный шрифт |
+| 11 | Mark-as-read (Gmail → sidebar) | sidebar обновляется через `flags` event |
+| 12 | Reconnect | backend и extension восстанавливают соединение |
+
+---
+
+## 🩺 Troubleshooting
+
+<details>
+<summary><code>MASTER_KEY is required (64 hex chars)</code></summary>
+Ключ в <code>.env</code> пустой или неправильной длины. 64 hex = ровно 32 байта.
+</details>
+
+<details>
+<summary>IMAP <code>AUTHENTICATIONFAILED</code></summary>
+Неверный пароль / не выдан app password. Backend держит 60с между попытками — не долбит сервер.
+</details>
+
+<details>
+<summary>IMAP рвётся каждые несколько минут</summary>
+Короткий IDLE-таймаут у провайдера. Мы пере-IDLE раз в 25 мин. Проверьте, что TLS не закрывается по idle.
+</details>
+
+<details>
+<summary><code>openrouter_api_key is not configured</code></summary>
+Добавьте ключ в Settings web UI.
+</details>
+
+<details>
+<summary>Extension sidebar пустой, WS status <code>closed</code></summary>
+Неправильный <code>backend_url</code> / <code>api_key</code>. Смотрите консоль background SW (<code>chrome://extensions</code> → Service worker → inspect). На смену значений WS пересоздаётся автоматически.
+</details>
+
+<details>
+<summary>MV3 service worker засыпает</summary>
+<code>chrome.alarms</code> с <code>periodInMinutes: 0.5</code> держит его живым + триггерит reconnect при не-OPEN WS.
+</details>
+
+<details>
+<summary><code>Receiving end does not exist</code> в консоли расширения</summary>
+Нормально: sidebar iframe ещё не открыт, сообщение игнорируется.
+</details>
+
+<details>
+<summary>Web UI <code>401 invalid_api_key</code></summary>
+Очистите <code>sessionStorage</code> и залогиньтесь заново.
+</details>
+
+---
+
+## 🛠 Полезные команды
 
 ```bash
 # Генерация MASTER_KEY
 openssl rand -hex 32
 
-# Инициализация БД (удалите data.db чтобы пересоздать с нуля)
-cd webapp && npm run init-db
+# Пересоздать БД
+rm webapp/data.db && cd webapp && npm run init-db
 
 # Только backend (без Vite)
 cd webapp && npm run dev:server
@@ -158,10 +223,30 @@ cd webapp && npm run dev:client
 cd webapp && npm run build && npm run start
 ```
 
-## Архитектура
+---
 
-Полная карта файлов проекта с описанием каждого модуля — в [architecture.md](./architecture.md).
+## 📚 Архитектура
 
-## License
+Полная карта файлов с описанием каждого модуля — в [`architecture.md`](./architecture.md).
 
-Private project, все права defended — см. владельца репозитория.
+High-level:
+
+```
+IMAP IDLE ──▶ fetcher ──▶ messages (SQLite)
+                              │
+                              ├─▶ LLM classifier ──▶ classification_json
+                              │           │
+                              │           └─▶ actions/runner
+                              │                  ├─▶ Telegram
+                              │                  ├─▶ Webhook
+                              │                  ├─▶ SMTP forward
+                              │                  └─▶ Browser notify
+                              │
+                              └─▶ WS hub ──▶ Web UI + Chrome Extension sidebar
+```
+
+---
+
+## 📄 License
+
+MIT — см. [LICENSE](./LICENSE).

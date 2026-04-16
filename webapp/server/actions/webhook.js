@@ -15,14 +15,15 @@
 // Возвращает { ok, status, error? } — никогда не кидает.
 
 import { logger } from '../logger.js';
+import { renderTemplate } from './template.js';
 
 const log = logger.child({ module: 'action:webhook' });
 
 const TIMEOUT_MS = 15_000;
 
-function buildPayload(message, classification) {
+function buildPayload(message, classification, template) {
   const m = message || {};
-  return {
+  const payload = {
     message: {
       id: m.id ?? null,
       account_id: m.account_id ?? null,
@@ -37,6 +38,13 @@ function buildPayload(message, classification) {
     },
     classification: classification ?? null,
   };
+  // Если задан шаблон — рендерим его и кладём как поле text в payload.
+  // Без экранирования (webhook принимает произвольный JSON-текст).
+  const tpl = typeof template === 'string' ? template.trim() : '';
+  if (tpl) {
+    payload.text = renderTemplate(tpl, { message, classification });
+  }
+  return payload;
 }
 
 function buildHeaders(customHeaders) {
@@ -82,7 +90,7 @@ export async function sendWebhook(config, message, classification) {
     return { ok: false, error: 'webhook: config.url must be a http(s) URL' };
   }
   const headers = buildHeaders(config?.headers);
-  const body = JSON.stringify(buildPayload(message, classification));
+  const body = JSON.stringify(buildPayload(message, classification, config?.template));
 
   let lastErr = null;
   for (let attempt = 0; attempt < 2; attempt++) {

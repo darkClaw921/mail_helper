@@ -48,6 +48,35 @@ export function h(tag, opts = {}, children = []) {
   return el;
 }
 
+/**
+ * Простой debounce: возвращает функцию, которая откладывает вызов `fn` на
+ * `wait` мс. Повторные вызовы сбрасывают таймер. У возвращённой функции есть
+ * метод `.cancel()` для очистки отложенного вызова (удобно при unmount/смене
+ * контекста, например при переключении промта).
+ *
+ * @template {(...args:any[])=>any} F
+ * @param {F} fn
+ * @param {number} wait
+ * @returns {F & { cancel: () => void }}
+ */
+export function debounce(fn, wait = 300) {
+  let timer = null;
+  const wrapped = function (...args) {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      fn.apply(this, args);
+    }, wait);
+  };
+  wrapped.cancel = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+  return wrapped;
+}
+
 export function showError(root, err) {
   const msg = err?.message || String(err);
   const banner = h('div', {

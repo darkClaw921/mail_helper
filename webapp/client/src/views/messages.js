@@ -348,10 +348,28 @@ export async function renderMessages(root) {
   searchInput.type = 'search';
   searchInput.placeholder = 'Поиск по теме, отправителю…';
   searchInput.className = 'input w-80 max-w-full';
+  // Подхватываем глобальный query, если он был установлен topbar-поиском.
+  const initialQ = (typeof window !== 'undefined' && window.__globalSearchQuery) || '';
+  if (initialQ) {
+    state.search = initialQ;
+    searchInput.value = initialQ;
+  }
   searchInput.addEventListener('input', (e) => {
     state.search = e.target.value;
+    window.__globalSearchQuery = state.search;
     if (listHostRef) renderTable(listHostRef);
   });
+  // Подписка на topbar-поиск. Снимаем предыдущий листенер (переход между views).
+  if (window.__messagesSearchHandler) {
+    window.removeEventListener('global-search', window.__messagesSearchHandler);
+  }
+  window.__messagesSearchHandler = (ev) => {
+    const q = ev.detail?.q ?? '';
+    state.search = q;
+    searchInput.value = q;
+    if (listHostRef) renderTable(listHostRef);
+  };
+  window.addEventListener('global-search', window.__messagesSearchHandler);
 
   const accountSel = Select({
     value: state.accountId,

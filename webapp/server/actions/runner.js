@@ -42,15 +42,22 @@ let registered = false;
 
 // Выбираем: enabled=1 и (prompt_id IS NULL => глобальный action, применим к любому промту)
 // или prompt_id совпадает с тем, по которому письмо было классифицировано.
+//
+// Порядок выполнения: priority DESC, id ASC.
+// Соглашение: чем БОЛЬШЕ priority, тем РАНЬШЕ правило проверяется.
+// UI drag-reorder: верхнее правило = наибольший priority (см. views/prompts.js).
 const selectActionsStmt = db.prepare(
-  `SELECT id, name, prompt_id, match_expr, type, config_enc, enabled
+  `SELECT id, name, prompt_id, match_expr, type, config_enc, enabled, priority
      FROM actions
     WHERE enabled = 1
       AND (prompt_id IS NULL OR prompt_id = @prompt_id)
-    ORDER BY id`,
+    ORDER BY priority DESC, id ASC`,
 );
 const selectPromptParamsStmt = db.prepare(
-  'SELECT output_params FROM prompts WHERE id = ?',
+  'SELECT output_params, match_mode FROM prompts WHERE id = ?',
+);
+const selectPromptMatchModeStmt = db.prepare(
+  'SELECT match_mode FROM prompts WHERE id = ?',
 );
 const selectMessageTokensStmt = db.prepare(
   'SELECT tokens_used FROM messages WHERE id = ?',
@@ -155,6 +162,32 @@ export async function runActionsForMessage(message, classification, prompt = nul
   if (rows.length === 0) {
     log.debug({ message_id: message?.id, prompt_id: promptId }, 'no enabled actions');
     return [];
+  }
+
+  // Ф3.2 — режим выполнения правил.
+  // 'all'   — все matched правила диспатчатся параллельно (поведение по умолчанию).
+  // 'first' — правила перебираются последовательно в порядке priority DESC, id ASC;
+  //           после ПЕРВОГО matched + успешного dispatch (ok=true) — break; остальные
+  //           правила пропускаются. Если matched, но dispatch упал — продолжаем к
+  //           следующему matched правилу (считаем «первое подходящее = первое, которое
+  //           реально доставилось»). Альтернативная семантика — «первое matched
+  //           независимо от ok» — может быть рассмотрена позже.
+  let matchMode = 'all';
+  if (promptId != null) {
+    try {
+      const prow = selectPromptMatchModeStmt.get(promptId);
+      if (prow && (prow.match_mode === 'all' || prow.match_mode === 'first')) {
+        matchMode = prow.match_mode;
+      }
+    } catch {
+      matchMode = 'all';
+    }
+  } else if (prompt && (prompt.match_mode === 'all' || prompt.match_mode === 'first')) {
+    matchMode = prompt.match_mode;
+  }
+
+  if (matchMode === 'first') {
+    return runFirstMode(rows, message, classification, prompt, promptId);
   }
 
   const pending = [];
@@ -292,6 +325,119 @@ export async function runActionsForMessage(message, classification, prompt = nul
     'actions run complete',
   );
 
+  return results;
+}
+
+/**
+ * Последовательный режим (match_mode='first').
+ * Перебираем actions в порядке priority DESC, id ASC; после первого matched+ok=true — break.
+ * Остальные правила не появляются в результатах (ни matched, ни skipped) — по смыслу
+ * они даже не были проверены. Если matched, но dispatch упал — продолжаем к следующему.
+ */
+async function runFirstMode(rows, message, classification, prompt, promptId) {
+  const results = [];
+  let matchedCount = 0;
+  let okCount = 0;
+  for (const row of rows) {
+    const config = decryptConfig(row);
+    if (config === null) {
+      results.push({
+        action_id: row.id,
+        type: row.type,
+        matched: false,
+        ok: false,
+        error: 'config decrypt/parse failed',
+      });
+      continue;
+    }
+
+    let matched;
+    try {
+      const allowed = resolveAllowedIdentifiers(row, prompt);
+      const fn = compileExpr(row.match_expr, allowed);
+      matched = fn(classification || {});
+    } catch (err) {
+      log.error(
+        {
+          action_id: row.id,
+          type: row.type,
+          match_expr: row.match_expr,
+          err: err?.message || String(err),
+        },
+        'match_expr evaluation failed',
+      );
+      results.push({
+        action_id: row.id,
+        type: row.type,
+        matched: false,
+        ok: false,
+        error: `match_expr: ${err?.message || String(err)}`,
+      });
+      continue;
+    }
+
+    if (!matched) {
+      log.debug(
+        { action_id: row.id, type: row.type, match_expr: row.match_expr },
+        'action did not match (first-mode)',
+      );
+      results.push({ action_id: row.id, type: row.type, matched: false });
+      continue;
+    }
+
+    matchedCount += 1;
+    const enriched = { ...row, config };
+    let tokensUsed = null;
+    try {
+      const mrow = message?.id ? selectMessageTokensStmt.get(message.id) : null;
+      tokensUsed = mrow && Number.isFinite(mrow.tokens_used) ? mrow.tokens_used : null;
+    } catch {
+      tokensUsed = null;
+    }
+
+    let dispatchRes;
+    try {
+      dispatchRes = await dispatchAction(enriched, message, classification);
+    } catch (err) {
+      dispatchRes = { ok: false, error: err?.message || String(err) };
+    }
+    const ok = !!dispatchRes?.ok;
+    const error = ok ? undefined : dispatchRes?.error || 'unknown error';
+    logActionRun({
+      actionId: row.id,
+      messageId: message?.id ?? null,
+      ok,
+      error,
+      tokensUsed,
+    });
+    results.push({
+      action_id: row.id,
+      type: row.type,
+      matched: true,
+      ok,
+      error,
+      tokens_used: tokensUsed,
+    });
+    if (ok) {
+      okCount += 1;
+      // break на первом matched+ok.
+      break;
+    }
+    // matched, но ok=false: продолжаем к следующему matched правилу.
+  }
+
+  log.info(
+    {
+      message_id: message?.id,
+      prompt_id: promptId,
+      total: rows.length,
+      matched: matchedCount,
+      ok: okCount,
+      failed: matchedCount - okCount,
+      match_mode: 'first',
+    },
+    'actions run complete',
+  );
   return results;
 }
 

@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS prompts (
   model         TEXT,
   is_default    INTEGER DEFAULT 0,
   enabled       INTEGER DEFAULT 1,
+  match_mode    TEXT    NOT NULL DEFAULT 'all' CHECK (match_mode IN ('all','first')),
   created_at    INTEGER
 );
 
@@ -46,7 +47,8 @@ CREATE TABLE IF NOT EXISTS actions (
   match_expr TEXT    NOT NULL,
   type       TEXT    NOT NULL,  -- telegram|webhook|forward|browser
   config_enc TEXT    NOT NULL,
-  enabled    INTEGER DEFAULT 1
+  enabled    INTEGER DEFAULT 1,
+  priority   INTEGER NOT NULL DEFAULT 0 -- выше = раньше в порядке выполнения (ORDER BY priority DESC, id ASC)
 );
 
 -- Письма: уже принятые и разобранные

@@ -30,7 +30,7 @@ import {
   Select,
   Toggle,
 } from '../components/ui.js';
-import { h, showError } from './util.js';
+import { h, showError, debounce } from './util.js';
 import { icon as renderIcon } from '../components/icons.js';
 
 /* ------------------------------ Константы ------------------------------ */
@@ -73,6 +73,84 @@ const DEFAULT_PROMPT_PARAMS = [
 ];
 
 /**
+ * Параметры письма, доступные как плейсхолдеры в шаблонах сообщений
+ * (renderTemplate на сервере). Используются вместе с DEFAULT_PROMPT_PARAMS
+ * для chips-подсказок в секции «Правила маршрутизации» (views/prompts.js).
+ */
+export const MESSAGE_PARAMS = [
+  { key: 'subject', type: 'string', description: 'Тема письма' },
+  { key: 'from', type: 'string', description: 'Отправитель (from_addr)' },
+  { key: 'to', type: 'string', description: 'Получатель (to_addr)' },
+  { key: 'snippet', type: 'string', description: 'Короткий превью текста' },
+  { key: 'date', type: 'number', description: 'Дата (unix ts)' },
+];
+
+/**
+ * Вставить text в <input>/<textarea> по позиции курсора (или в конец).
+ * Диспатчит 'input' event, чтобы связанный onInput обновил draft.
+ * Экспортируется для переиспользования в views/prompts.js.
+ */
+export function insertAtCursor(el, text) {
+  if (!el || typeof el.value !== 'string') return;
+  const hasSel = typeof el.selectionStart === 'number' && typeof el.selectionEnd === 'number';
+  const start = hasSel ? el.selectionStart : el.value.length;
+  const end = hasSel ? el.selectionEnd : el.value.length;
+  const before = el.value.slice(0, start);
+  const after = el.value.slice(end);
+  el.value = before + text + after;
+  const pos = start + text.length;
+  try {
+    el.selectionStart = el.selectionEnd = pos;
+  } catch {
+    /* input type может не поддерживать selection — игнорируем */
+  }
+  el.focus();
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+/**
+ * Рендерит ряд chips с параметрами. Клик → вставка `${prefix}${key}${suffix}`
+ * в target-элемент (input/textarea) по позиции курсора. Если target отсутствует
+ * — fallback на clipboard.
+ *
+ * @param {Array<{key:string,type?:string,description?:string}>} params
+ * @param {{ prefix?: string, suffix?: string, getTarget?: () => HTMLElement|null }} opts
+ * @returns {HTMLElement}
+ */
+export function renderParamChipsFor(params, opts = {}) {
+  const { prefix = '', suffix = '', getTarget = null } = opts;
+  const wrap = h('div', { class: 'flex flex-wrap gap-1 mt-1' });
+  if (!Array.isArray(params) || !params.length) return wrap;
+  for (const p of params) {
+    if (!p || !p.key) continue;
+    const value = `${prefix}${p.key}${suffix}`;
+    const chip = h('button', {
+      type: 'button',
+      class:
+        'inline-flex items-center gap-1 rounded-[var(--radius-sm)] bg-[color:var(--color-bg-elevated)] hover:bg-[color:var(--color-bg-surface)] border border-[color:var(--color-border-subtle)] px-2 py-0.5 text-[11px] text-[color:var(--color-text-secondary)]',
+      title: `${p.type || ''}${p.description ? ' — ' + p.description : ''} · клик — вставить «${value}»`,
+      onclick: () => {
+        const target = typeof getTarget === 'function' ? getTarget() : null;
+        if (target) {
+          insertAtCursor(target, value);
+          return;
+        }
+        try {
+          navigator.clipboard?.writeText(value);
+        } catch {
+          /* noop */
+        }
+      },
+    }, [
+      h('span', { class: 'font-mono text-[color:var(--color-text-primary)]', text: value }),
+      p.type ? h('span', { class: 'text-[color:var(--color-text-muted)]', text: p.type }) : null,
+    ]);
+    wrap.appendChild(chip);
+  }
+  return wrap;
+}
+
+/**
  * Собирает объединённый список параметров (дефолты + кастомные из промта),
  * избегая дублей по key. Используется для подсказок в UI.
  */
@@ -89,6 +167,45 @@ function mergePromptParams(custom) {
   return out;
 }
 
+/* --------------------- Валидация match_expr (Ф2) ---------------------- */
+
+// Tailwind-токены рамки по состоянию validation (совпадают с prompts.js,
+// чтобы UX был однородный в обоих редакторах).
+const VALIDATION_BORDER_CLASSES = [
+  'border-green-500/40',
+  'border-red-500/50',
+  'border-amber-500/30',
+];
+
+/**
+ * Применяет визуал к input'у match_expr по validation:
+ *   ok → зелёная рамка, errorEl скрыт.
+ *   error → красная рамка, errorEl с текстом.
+ *   pending → янтарная рамка (subtle).
+ *   idle → без акцентной рамки.
+ * Логика повторяет applyValidationStyle из views/prompts.js.
+ */
+function applyValidationStyle(inputEl, errorEl, validation) {
+  if (!inputEl || !validation) return;
+  for (const c of VALIDATION_BORDER_CLASSES) inputEl.classList.remove(c);
+  if (validation.state === 'ok') {
+    inputEl.classList.add('border-green-500/40');
+  } else if (validation.state === 'error') {
+    inputEl.classList.add('border-red-500/50');
+  } else if (validation.state === 'pending') {
+    inputEl.classList.add('border-amber-500/30');
+  }
+  if (errorEl) {
+    if (validation.state === 'error' && validation.error) {
+      errorEl.textContent = validation.error;
+      errorEl.classList.remove('hidden');
+    } else {
+      errorEl.textContent = '';
+      errorEl.classList.add('hidden');
+    }
+  }
+}
+
 /* ----------------------------- Helpers --------------------------------- */
 
 function makeNewDraft() {
@@ -97,7 +214,7 @@ function makeNewDraft() {
     name: '',
     prompt_id: null,
     triggerType: 'prompt',
-    match_expr: 'classification.important == true',
+    match_expr: '1 == 1',
     type: 'telegram',
     config: {},
     enabled: 1,
@@ -106,6 +223,10 @@ function makeNewDraft() {
     logging: 1,
     daily_limit: 100,
     template: '',
+    // UI-only: состояние валидации match_expr (Ф2). state ∈ idle|pending|ok|error.
+    // Для нового action (match_expr='1 == 1') стартуем с 'ok', первый onInput
+    // перевалидирует через сервер.
+    validation: { state: 'ok', error: null },
   };
 }
 
@@ -131,12 +252,31 @@ function draftFromAction(action) {
     logging: ui.logging !== undefined ? (ui.logging ? 1 : 0) : 1,
     daily_limit: ui.daily_limit ?? 100,
     template: cfg.template || '',
+    // Загруженный action уже прошёл серверную валидацию → начинаем с 'ok'.
+    validation: { state: 'ok', error: null },
+  };
+}
+
+/**
+ * Фабрика «пустого» правила маршрутизации — используется в секции «Правила
+ * маршрутизации» редактора промта (views/prompts.js), чтобы поведение было
+ * согласовано с backend-схемой actions (см. api/actions.js).
+ *
+ * Дефолт `match_expr: '1 == 1'` срабатывает на каждое письмо выбранного
+ * промта — пользователь потом уточняет условие.
+ */
+export function makeNewRule() {
+  return {
+    match_expr: '1 == 1',
+    type: 'telegram',
+    config: {},
+    enabled: 1,
   };
 }
 
 /* ----------------------- Динамические поля action ---------------------- */
 
-function buildActionFields(draft, onChange) {
+export function buildActionFields(draft, onChange) {
   const wrap = h('div', { class: 'flex flex-col gap-3' });
   const c = draft.config;
   switch (draft.type) {
@@ -205,6 +345,84 @@ function buildActionFields(draft, onChange) {
   return wrap;
 }
 
+/* --------------------------- match_expr help --------------------------- */
+
+/**
+ * Справочный блок под полем «Условие (match_expr)».
+ * Объясняет на пальцах синтаксис и приводит готовые примеры.
+ */
+export function renderMatchExprHelp() {
+  const box = h('div', {
+    class:
+      'rounded-[var(--radius-md)] border border-[color:var(--color-border-subtle)] bg-[color:var(--color-bg-elevated)] px-3 py-3 flex flex-col gap-2',
+  });
+
+  const title = h('div', {
+    class: 'text-xs font-semibold text-[color:var(--color-text-primary)]',
+    text: 'Как устроено условие',
+  });
+
+  const intro = h('div', {
+    class: 'text-xs text-[color:var(--color-text-secondary)] leading-relaxed',
+    text:
+      'Условие — маленькая фраза, которую программа проверяет на каждое письмо ' +
+      'после классификации ИИ. Если фраза «правда» — действие срабатывает. ' +
+      'Слева от оператора — поле из результата промта, справа — значение.',
+  });
+
+  const opsTitle = h('div', {
+    class: 'text-xs font-medium text-[color:var(--color-text-primary)] mt-1',
+    text: 'Операторы:',
+  });
+  const ops = h('ul', {
+    class: 'text-xs text-[color:var(--color-text-secondary)] pl-4 list-disc leading-relaxed',
+  }, [
+    h('li', { text: '== / != — равно / не равно' }),
+    h('li', { text: '&& — И (оба условия должны быть правдой)' }),
+    h('li', { text: '|| — ИЛИ (достаточно одного)' }),
+    h('li', { text: '! — НЕ (переворачивает результат)' }),
+    h('li', { text: 'tags.includes("слово") — проверяет, есть ли слово в списке тегов' }),
+  ]);
+
+  const exTitle = h('div', {
+    class: 'text-xs font-medium text-[color:var(--color-text-primary)] mt-1',
+    text: 'Примеры:',
+  });
+  const examples = [
+    ['1 == 1', 'всегда срабатывает (дефолт — ловит любое письмо этого промта)'],
+    ['important == true', 'только если ИИ пометил письмо как важное'],
+    ['tags.includes("счёт")', 'если в тегах есть слово «счёт»'],
+    ['important && !tags.includes("spam")', 'важное И не спам'],
+    ['important || tags.includes("срочно")', 'важное ИЛИ тег «срочно»'],
+  ];
+  const exList = h('div', { class: 'flex flex-col gap-1' });
+  for (const [code, desc] of examples) {
+    exList.appendChild(
+      h('div', { class: 'flex flex-col gap-0.5' }, [
+        h('code', {
+          class:
+            'text-xs font-mono text-[color:var(--color-text-primary)] bg-[color:var(--color-bg-surface)] px-2 py-0.5 rounded w-fit',
+          text: code,
+        }),
+        h('span', {
+          class: 'text-[11px] text-[color:var(--color-text-muted)] pl-1',
+          text: '— ' + desc,
+        }),
+      ]),
+    );
+  }
+
+  const note = h('div', {
+    class: 'text-[11px] text-[color:var(--color-text-muted)] mt-1 leading-relaxed',
+    text:
+      'Важно: пиши имя поля напрямую («important»), без префикса «classification.» — ' +
+      'он не поддерживается парсером.',
+  });
+
+  box.append(title, intro, opsTitle, ops, exTitle, exList, note);
+  return box;
+}
+
 /* ------------------------------ Preview chips -------------------------- */
 
 function renderPreview(host, draft, prompts) {
@@ -241,7 +459,8 @@ function buildPayload(draft) {
   if (draft.triggerType === 'always') {
     match_expr = '1 == 1';
   } else if (draft.triggerType === 'prompt' && !match_expr) {
-    match_expr = 'classification.important == true';
+    // Дефолт: условие, которое всегда срабатывает, если письмо подходит под выбранный промт.
+    match_expr = '1 == 1';
   }
   // _ui — храним UI-only поля (priority/logging/daily_limit/triggerType) внутри
   // config._ui, чтобы их можно было восстановить в edit‑режиме.
@@ -318,6 +537,20 @@ export async function renderActionEditor(root, params = {}) {
     onClick: () => save(),
   });
   headerActions.append(cancelBtn, saveBtn);
+
+  /**
+   * Тоггает disabled-state кнопки «Сохранить» в зависимости от draft.validation.
+   * Используется validation-колбэками и при каждой перерисовке triggerBody.
+   */
+  function updateSaveButtonState() {
+    const invalid = draft.validation && draft.validation.state === 'error';
+    saveBtn.disabled = !!invalid;
+    if (invalid) {
+      saveBtn.setAttribute('title', 'Исправьте match_expr перед сохранением');
+    } else {
+      saveBtn.removeAttribute('title');
+    }
+  }
 
   const backBtn = h('button', {
     type: 'button',
@@ -521,29 +754,105 @@ export async function renderActionEditor(root, params = {}) {
       }));
     }
     if (draft.triggerType !== 'always') {
+      // Заранее объявляем плейсхолдеры; заполним после Input().
+      let matchExprInputEl = null;
+      let errorEl = null;
+
+      // Debounced-валидация создаётся заранее, чтобы onInput мог ссылаться
+      // на неё через замыкание (функция-декларация внутри if-блока не видна
+      // снаружи в strict mode).
+      const isPromptTrigger = draft.triggerType === 'prompt';
+
+      async function runValidateNow() {
+        debouncedValidate.cancel();
+        if (!isPromptTrigger) return;
+        const expr = (draft.match_expr || '').trim();
+        if (!expr) {
+          draft.validation = { state: 'error', error: 'expression is required' };
+          applyValidationStyle(matchExprInputEl, errorEl, draft.validation);
+          updateSaveButtonState();
+          return;
+        }
+        try {
+          const resp = await actionsApi.validateExpr({
+            expr,
+            promptId: draft.prompt_id ?? null,
+          });
+          if (resp && resp.ok) {
+            draft.validation = { state: 'ok', error: null };
+          } else {
+            draft.validation = {
+              state: 'error',
+              error: (resp && resp.error) || 'validation failed',
+            };
+          }
+        } catch (err) {
+          draft.validation = {
+            state: 'error',
+            error: err?.message || String(err),
+          };
+        }
+        applyValidationStyle(matchExprInputEl, errorEl, draft.validation);
+        updateSaveButtonState();
+      }
+
+      const debouncedValidate = debounce(() => runValidateNow(), 400);
+
       const matchExprField = Input({
         label: 'Условие (match_expr)',
         value: draft.match_expr,
-        placeholder: 'important == true',
+        placeholder: '1 == 1',
         hint: draft.triggerType === 'regex'
           ? 'Регулярка/выражение, например: subject =~ /важно/i'
-          : 'Выражение по выходным параметрам промта. Поддерживаются == != && || ! и .includes(). Клик по параметру — вставить имя в позицию курсора.',
-        onInput: (v) => { draft.match_expr = v; renderPreview(previewBody, draft, prompts); },
+          : 'По умолчанию «1 == 1» — действие срабатывает на каждое письмо этого промта. Замени, если нужен фильтр.',
+        onInput: (v) => {
+          draft.match_expr = v;
+          renderPreview(previewBody, draft, prompts);
+          if (isPromptTrigger) {
+            draft.validation = { state: 'pending', error: null };
+            applyValidationStyle(matchExprInputEl, errorEl, draft.validation);
+            debouncedValidate();
+          }
+        },
       });
       triggerBody.appendChild(matchExprField);
-      if (draft.triggerType === 'prompt') {
-        const matchExprEl = matchExprField.querySelector('input') || matchExprField;
+      matchExprInputEl = matchExprField.querySelector('input') || matchExprField;
+      errorEl = h('div', {
+        class: 'text-xs text-[color:var(--color-accent-red)] hidden',
+      });
+      triggerBody.appendChild(errorEl);
+
+      if (isPromptTrigger) {
+        matchExprInputEl.addEventListener('blur', () => {
+          draft.validation = { state: 'pending', error: null };
+          applyValidationStyle(matchExprInputEl, errorEl, draft.validation);
+          runValidateNow();
+        });
+        // Первичная отрисовка рамки по текущему validation (для edit ='ok').
+        applyValidationStyle(matchExprInputEl, errorEl, draft.validation);
+      } else {
+        // triggerType === 'regex': наша валидация не применяется — сбрасываем
+        // validation до 'ok', чтобы Save не блокировался.
+        draft.validation = { state: 'ok', error: null };
+      }
+
+      if (isPromptTrigger) {
+        triggerBody.appendChild(renderMatchExprHelp());
         triggerBody.appendChild(
           h('div', {}, [
             h('div', {
               class: 'text-xs text-[color:var(--color-text-secondary)]',
-              text: 'Доступные параметры:',
+              text: 'Доступные параметры (клик — вставить имя в условие):',
             }),
-            renderParamChips('', '', () => matchExprEl),
+            renderParamChips('', '', () => matchExprInputEl),
           ]),
         );
       }
+    } else {
+      // triggerType === 'always' — нет поля match_expr → сбрасываем.
+      draft.validation = { state: 'ok', error: null };
     }
+    updateSaveButtonState();
   }
 
   function renderActionBody() {
@@ -614,6 +923,9 @@ export async function renderActionEditor(root, params = {}) {
 
   /* ---- Save ---- */
   async function save() {
+    // Блокируем save, если match_expr невалидна (должны поймать дубль через
+    // disabled saveBtn, но подстраховываемся на случай программного вызова).
+    if (draft.validation && draft.validation.state === 'error') return;
     // Простая валидация
     if (draft.triggerType === 'prompt' && !draft.prompt_id) {
       // eslint-disable-next-line no-alert

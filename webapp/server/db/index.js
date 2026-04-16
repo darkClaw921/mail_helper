@@ -7,6 +7,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { config } from '../config.js';
+import { logger } from '../logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = resolve(__dirname, 'schema.sql');
@@ -77,9 +78,21 @@ export function applySchema(db) {
   if (!promptsCols.includes('output_params')) {
     db.exec('ALTER TABLE prompts ADD COLUMN output_params TEXT');
   }
+  // Ф3.1 — match_mode: режим выполнения правил ('all' | 'first').
+  // SQLite не поддерживает CHECK в ALTER ADD COLUMN, валидация — на уровне Zod в API.
+  if (!promptsCols.includes('match_mode')) {
+    db.exec("ALTER TABLE prompts ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'all'");
+    logger.info({ migration: 'prompts.match_mode' }, 'applied schema migration');
+  }
   const messagesCols = db.prepare("PRAGMA table_info('messages')").all().map((r) => r.name);
   if (!messagesCols.includes('tokens_used')) {
     db.exec('ALTER TABLE messages ADD COLUMN tokens_used INTEGER');
+  }
+  // Ф3.1 — actions.priority: приоритет выполнения правила (выше = раньше).
+  const actionsCols = db.prepare("PRAGMA table_info('actions')").all().map((r) => r.name);
+  if (!actionsCols.includes('priority')) {
+    db.exec('ALTER TABLE actions ADD COLUMN priority INTEGER NOT NULL DEFAULT 0');
+    logger.info({ migration: 'actions.priority' }, 'applied schema migration');
   }
 }
 

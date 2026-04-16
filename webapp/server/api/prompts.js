@@ -44,22 +44,24 @@ const createSchema = z
     model: z.string().optional().nullable(),
     is_default: zBoolInt.optional(),
     enabled: zBoolInt.optional(),
+    // Ф3.3 — режим выполнения правил ('all' → все matched, 'first' → только первое).
+    match_mode: z.enum(['all', 'first']).optional(),
   })
   .strict();
 
 const updateSchema = createSchema.partial();
 
 const selectAllStmt = db.prepare(
-  'SELECT id, name, system_prompt, output_schema, output_params, model, is_default, enabled, created_at ' +
+  'SELECT id, name, system_prompt, output_schema, output_params, model, is_default, enabled, match_mode, created_at ' +
     'FROM prompts ORDER BY id',
 );
 const selectOneStmt = db.prepare(
-  'SELECT id, name, system_prompt, output_schema, output_params, model, is_default, enabled, created_at ' +
+  'SELECT id, name, system_prompt, output_schema, output_params, model, is_default, enabled, match_mode, created_at ' +
     'FROM prompts WHERE id = ?',
 );
 const insertStmt = db.prepare(
-  'INSERT INTO prompts (name, system_prompt, output_schema, output_params, model, is_default, enabled, created_at) ' +
-    'VALUES (@name, @system_prompt, @output_schema, @output_params, @model, @is_default, @enabled, @created_at)',
+  'INSERT INTO prompts (name, system_prompt, output_schema, output_params, model, is_default, enabled, match_mode, created_at) ' +
+    'VALUES (@name, @system_prompt, @output_schema, @output_params, @model, @is_default, @enabled, @match_mode, @created_at)',
 );
 const clearDefaultsStmt = db.prepare(
   'UPDATE prompts SET is_default = 0 WHERE is_default = 1 AND id <> ?',
@@ -105,6 +107,7 @@ router.post('/', (req, res) => {
       model: d.model ?? null,
       is_default: d.is_default ?? 0,
       enabled: d.enabled ?? 1,
+      match_mode: d.match_mode ?? 'all',
       created_at: Math.floor(Date.now() / 1000),
     });
     return info.lastInsertRowid;
@@ -143,6 +146,7 @@ router.put('/:id', (req, res) => {
   if (d.model !== undefined) assign('model', d.model);
   if (d.is_default !== undefined) assign('is_default', d.is_default);
   if (d.enabled !== undefined) assign('enabled', d.enabled);
+  if (d.match_mode !== undefined) assign('match_mode', d.match_mode);
 
   const tx = db.transaction(() => {
     if (d.is_default === 1) clearDefaultsStmt.run(id);
